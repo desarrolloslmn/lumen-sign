@@ -35,7 +35,7 @@
           <input id="login-email" type="email" autocomplete="email" required />
         </label>
         <label>Contraseña
-          <input id="login-password" type="password" autocomplete="current-password" required minlength="8" />
+          <input id="login-password" type="password" autocomplete="current-password" required minlength="10" />
         </label>
         <button class="primary" type="submit">Ingresar</button>
         <button id="forgot-password" class="link-button" type="button">Olvidé mi contraseña</button>
@@ -50,7 +50,7 @@
           <input id="register-email" type="email" autocomplete="email" required />
         </label>
         <label>Contraseña
-          <input id="register-password" type="password" autocomplete="new-password" required minlength="8" />
+          <input id="register-password" type="password" autocomplete="new-password" required minlength="10" />
         </label>
         <button class="primary" type="submit">Registrarme</button>
         <p class="muted small">Las cuentas nuevas quedan pendientes hasta que un administrador las active.</p>
@@ -153,10 +153,10 @@
           </div>
 
           <label class="checkbox-row">
-            <input id="submit-immediately" type="checkbox" checked />
-            Enviar a aprobación o firma al terminar la carga
+            <input id="prepare-after-save" type="checkbox" checked />
+            Abrir el preparador visual después de guardar
           </label>
-          <button class="primary" type="submit">Guardar documento</button>
+          <button class="primary" type="submit">Guardar borrador</button>
         </form>
       </section>
 
@@ -242,8 +242,110 @@
     </div>
   </dialog>
 
+
+  <dialog id="prepare-dialog" class="dialog visual-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
+    <div class="visual-header">
+      <div>
+        <h2>Preparar campos de firma</h2>
+        <p class="muted">Selecciona firmante y tipo de campo. Después colócalo, arrástralo y cambia su tamaño sobre el PDF.</p>
+      </div>
+      <div class="button-row">
+        <button id="prepare-save" class="secondary" type="button">Guardar campos</button>
+        <button id="prepare-save-submit" class="primary" type="button">Guardar y enviar</button>
+      </div>
+    </div>
+    <div class="visual-layout">
+      <aside class="field-panel">
+        <label>Firmante
+          <select id="field-assignee"></select>
+        </label>
+        <label>Tipo de campo
+          <select id="field-type">
+            <option value="signature">Firma</option>
+            <option value="initials">Iniciales</option>
+            <option value="date">Fecha</option>
+            <option value="name">Nombre</option>
+            <option value="text">Texto</option>
+            <option value="checkbox">Casilla</option>
+          </select>
+        </label>
+        <label>Etiqueta
+          <input id="field-label" maxlength="120" placeholder="Ej. Firma del proveedor" />
+        </label>
+        <label class="checkbox-row">
+          <input id="field-required" type="checkbox" checked />
+          Obligatorio
+        </label>
+        <button id="add-field" class="primary" type="button">Agregar en esta página</button>
+        <hr />
+        <div id="selected-field-panel" class="stack hidden">
+          <strong>Campo seleccionado</strong>
+          <label>Firmante
+            <select id="selected-field-assignee"></select>
+          </label>
+          <label>Tipo
+            <select id="selected-field-type">
+              <option value="signature">Firma</option>
+              <option value="initials">Iniciales</option>
+              <option value="date">Fecha</option>
+              <option value="name">Nombre</option>
+              <option value="text">Texto</option>
+              <option value="checkbox">Casilla</option>
+            </select>
+          </label>
+          <label>Etiqueta
+            <input id="selected-field-label" maxlength="120" />
+          </label>
+          <label class="checkbox-row">
+            <input id="selected-field-required" type="checkbox" />
+            Obligatorio
+          </label>
+          <button id="delete-field" class="danger" type="button">Eliminar campo</button>
+        </div>
+        <div class="field-help small muted">
+          <p><strong>Consejo:</strong> agrega al menos un campo de Firma para cada firmante.</p>
+          <p>Los campos se guardan como porcentajes para conservar su posición en cualquier pantalla.</p>
+        </div>
+      </aside>
+      <section class="pdf-workspace">
+        <div class="pdf-toolbar">
+          <button id="prepare-prev-page" class="secondary" type="button">← Anterior</button>
+          <span>Página <strong id="prepare-page-number">1</strong> de <strong id="prepare-page-count">1</strong></span>
+          <button id="prepare-next-page" class="secondary" type="button">Siguiente →</button>
+          <button id="prepare-zoom-out" class="secondary" type="button">−</button>
+          <span id="prepare-zoom-label">100%</span>
+          <button id="prepare-zoom-in" class="secondary" type="button">+</button>
+        </div>
+        <div id="prepare-pages" class="pdf-pages"></div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="sign-dialog" class="dialog visual-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
+    <div class="visual-header">
+      <div>
+        <h2>Revisar y firmar documento</h2>
+        <p class="muted">Completa tus campos resaltados. No podrás finalizar mientras falte un campo obligatorio.</p>
+      </div>
+      <button id="finish-signing" class="primary" type="button">Finalizar firma</button>
+    </div>
+    <div class="signing-summary">
+      <span id="sign-progress">0 de 0 campos completos</span>
+      <button id="next-required-field" class="secondary" type="button">Ir al siguiente campo</button>
+    </div>
+    <div id="sign-pages" class="pdf-pages sign-pages"></div>
+  </dialog>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+    }
+  </script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
