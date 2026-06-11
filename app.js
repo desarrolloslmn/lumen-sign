@@ -385,19 +385,57 @@
 
     state.profile = data;
   }
+async function loadProfiles() {
+  const { data, error } = await client
+    .from('profiles')
+    .select('id,email,full_name,department,role,status,created_at')
+    .order('full_name');
 
-  async function loadProfiles() {
-    const { data, error } = await client
-      .from('profiles')
-      .select(
-        'id,email,full_name,department,role,status,created_at'
-      )
-      .order('full_name');
+  if (error) throw error;
 
-    if (error) throw error;
+  state.profiles = data || [];
 
-    state.profiles = data || [];
-  }
+  // Actualiza los selectores que fueron creados antes
+  // de que Supabase terminara de cargar los usuarios.
+  refreshParticipantUserOptions();
+}
+
+function refreshParticipantUserOptions() {
+  qsa('.participant-user').forEach(select => {
+    const selectedUserId = select.value;
+
+    const activeUsers = state.profiles.filter(
+      profile => profile.status === 'active'
+    );
+
+    const options = activeUsers
+      .map(profile => `
+        <option
+          value="${profile.id}"
+          ${profile.id === selectedUserId ? 'selected' : ''}
+        >
+          ${escapeHtml(profile.full_name || profile.email)}
+          —
+          ${escapeHtml(roleLabels[profile.role] || profile.role)}
+        </option>
+      `)
+      .join('');
+
+    select.innerHTML = `
+      <option value="">
+        ${activeUsers.length ? 'Selecciona' : 'No hay usuarios activos'}
+      </option>
+      ${options}
+    `;
+
+    if (
+      selectedUserId &&
+      activeUsers.some(profile => profile.id === selectedUserId)
+    ) {
+      select.value = selectedUserId;
+    }
+  });
+}
 
   async function loadDocuments() {
     if (!isActive()) {
