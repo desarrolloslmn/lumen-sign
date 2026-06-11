@@ -30,7 +30,8 @@
     flowDocumentId: null,
     signatureDrawing: false,
     profileDirty: false, loadedUserId: null, sessionLoadPromise: null,
-    prepare: null, signing: null
+    prepare: null, signing: null,
+    workflowCandidates: [], wizardStep: 1
   };
 
   const els = {};
@@ -55,11 +56,14 @@
   function cacheElements() {
     [
       'auth-view','app-view','login-form','register-form','forgot-password','logout-button','admin-nav',
-      'sidebar-user','user-status-pill','pending-banner','stats-grid','recent-documents','documents-table',
-      'document-search','document-status-filter','new-document-form','participants-builder','add-participant',
-      'tasks-table','profile-form','signature-canvas','clear-signature','save-signature','signature-list','signed-history-table',
-      'admin-users-table','refresh-users','document-dialog','document-detail','flow-dialog','flow-builder',
-      'flow-add-participant','save-flow','menu-button','main-nav','page-title','page-subtitle','toast',
+      'login-password-toggle','register-password-toggle','sidebar-user','user-status-pill','pending-banner',
+      'next-action-card','stats-grid','recent-documents','documents-table','document-search','document-status-filter',
+      'new-document-form','wizard-steps','wizard-back','wizard-next','wizard-create','wizard-message','wizard-review',
+      'approval-stage','approvers-builder','signers-builder','add-approver','add-signer',
+      'tasks-table','profile-onboarding','profile-form','signature-canvas','clear-signature','save-signature','signature-list','signed-history-table',
+      'admin-users-table','refresh-users','document-dialog','document-detail','flow-dialog','flow-approval-stage',
+      'flow-approvers-builder','flow-signers-builder','flow-add-approver','flow-add-signer','save-flow',
+      'menu-button','main-nav','page-title','page-subtitle','toast',
       'prepare-dialog','prepare-save','prepare-save-submit','field-assignee','field-type','field-label','field-required','add-field',
       'selected-field-panel','selected-field-assignee','selected-field-type','selected-field-label','selected-field-required','delete-field',
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
@@ -166,7 +170,7 @@
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
     state.sessionLoadPromise = (async () => {
       await loadProfile(); showApp(); configureAppForProfile();
-      await Promise.all([loadProfiles(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures()]);
+      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures()]);
       renderAll(); state.loadedUserId = userId;
     })();
     try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
@@ -180,18 +184,32 @@
   }
 
   async function loadProfiles() {
-    const { data, error } = await client.from('profiles').select('id,email,full_name,department,role,status,created_at').order('full_name');
+    const { data, error } = await client.from('profiles')
+      .select('id,email,full_name,department,role,status,created_at')
+      .order('full_name');
     if (error) throw error;
     state.profiles = data || [];
-    refreshParticipantUserOptions();
   }
 
+  async function loadWorkflowCandidates() {
+    const { data, error } = await client.rpc('list_workflow_candidates');
+    if (error) {
+      console.warn('No se pudo cargar list_workflow_candidates; se usará la lista básica.', error);
+      state.workflowCandidates = state.profiles
+        .filter(profile => profile.status === 'active')
+        .map(profile => ({ ...profile, has_signature: false }));
+    } else {
+      state.workflowCandidates = data || [];
+    }
+    refreshGuidedUserOptions();
+  }
 
-  function refreshParticipantUserOptions() {
-    qsa('.participant-user').forEach(select => {
+  function refreshGuidedUserOptions() {
+    qsa('.ordered-user').forEach(select => {
+      const role = select.dataset.participantRole;
       const selected = select.value;
-      select.innerHTML = `<option value="">Selecciona</option>${activeProfilesOptions(selected)}`;
-      if (selected && state.profiles.some(p => p.id === selected && p.status === 'active')) select.value = selected;
+      select.innerHTML = candidateOptions(role, selected);
+      if (selected) select.value = selected;
     });
   }
 
@@ -206,9 +224,34 @@
     if (!isActive()) { state.tasks = []; return; }
     const { data, error } = await client.from('document_participants')
       .select('id,document_id,participant_role,sequence,action_status,documents(id,title,status,category,updated_at)')
-      .eq('user_id', state.session.user.id).eq('action_status', 'pending').in('participant_role', ['approver','signer']).order('sequence');
+      .eq('user_id', state.session.user.id)
+      .eq('action_status', 'pending')
+      .in('participant_role', ['approver','signer'])
+      .order('sequence');
     if (error) throw error;
-    state.tasks = (data || []).filter(item => item.documents);
+    const mine = (data || []).filter(item => item.documents);
+    const ids = [...new Set(mine.map(item => item.document_id))];
+    let allPending = [];
+    if (ids.length) {
+      const response = await client.from('document_participants')
+        .select('document_id,participant_role,sequence,action_status')
+        .in('document_id', ids)
+        .eq('action_status', 'pending')
+        .in('participant_role', ['approver','signer']);
+      if (response.error) throw response.error;
+      allPending = response.data || [];
+    }
+    state.tasks = mine.map(task => {
+      const expectedRole = task.documents.status === 'awaiting_approval' ? 'approver'
+        : task.documents.status === 'awaiting_signature' ? 'signer' : null;
+      const stageRows = allPending.filter(row => row.document_id === task.document_id && row.participant_role === expectedRole);
+      const minSequence = stageRows.length ? Math.min(...stageRows.map(row => Number(row.sequence))) : null;
+      const isActionable = task.participant_role === expectedRole && Number(task.sequence) === minSequence;
+      const waitingReason = expectedRole !== task.participant_role
+        ? (expectedRole === 'approver' ? 'La aprobación todavía no termina.' : 'La firma todavía no inicia.')
+        : !isActionable ? 'Otra persona debe actuar antes que tú.' : '';
+      return { ...task, is_actionable: isActionable, waiting_reason: waitingReason };
+    });
   }
 
   async function loadSignatures() {
@@ -244,22 +287,51 @@
     renderTasks();
     renderSignatures();
     renderAppliedSignatures();
+    renderOnboarding();
     if (isAdmin()) renderAdminUsers();
   }
 
   function renderDashboard() {
     const counts = {
       total: state.documents.length,
-      draft: state.documents.filter(d => d.status === 'draft').length,
-      pending: state.tasks.length,
-      completed: state.documents.filter(d => d.status === 'completed').length
+      draft: state.documents.filter(document => document.status === 'draft').length,
+      pending: state.tasks.filter(task => task.is_actionable).length,
+      completed: state.documents.filter(document => document.status === 'completed').length
     };
     els['stats-grid'].innerHTML = [
-      ['Documentos visibles', counts.total], ['Borradores', counts.draft],
-      ['Mis pendientes', counts.pending], ['Completados', counts.completed]
-    ].map(([label, count]) => `<article class="stat"><span class="muted">${label}</span><strong>${count}</strong></article>`).join('');
+      ['Documentos', counts.total, '▤'], ['Borradores', counts.draft, '○'],
+      ['Tareas para mí', counts.pending, '✓'], ['Completados', counts.completed, '✓']
+    ].map(([label,count,icon]) => `<article class="stat"><span class="stat-icon">${icon}</span><span class="muted">${label}</span><strong>${count}</strong></article>`).join('');
+
+    const actionable = state.tasks.find(task => task.is_actionable);
+    const draft = state.documents.find(document => document.status === 'draft' && document.owner_id === state.session.user.id);
+    let next;
+    if (!isActive()) {
+      next = { title:'Completa tu perfil', text:'Tu correo ya está confirmado. Falta que un administrador active tu cuenta.', label:'Ir a mi perfil', action:'profile', neutral:true };
+    } else if (actionable) {
+      const actionText = actionable.participant_role === 'approver' ? 'aprobar o rechazar' : 'revisar y firmar';
+      next = { title:`Tienes una tarea: ${actionable.documents.title}`, text:`Es tu turno de ${actionText}.`, label:'Abrir tarea', document:actionable.document_id };
+    } else if (draft) {
+      next = { title:`Continúa el borrador: ${draft.title}`, text:'Coloca los campos de firma y después inicia el proceso.', label:'Continuar configuración', document:draft.id, prepare:true };
+    } else if (isAdmin() || isContracts() || state.profile.role === 'user') {
+      next = { title:'Todo está al día', text:'Puedes crear un documento con el asistente paso a paso.', label:'Crear documento', action:'new-document', neutral:true };
+    } else {
+      next = { title:'No tienes tareas pendientes', text:'Cuando un documento llegue a tu turno aparecerá aquí.', label:'Ver documentos', action:'documents', neutral:true };
+    }
+    els['next-action-card'].innerHTML = `<div class="next-action ${next.neutral?'neutral':''}"><div><p class="eyebrow ${next.neutral?'dark':''}">Qué sigue</p><h2>${escapeHtml(next.title)}</h2><p>${escapeHtml(next.text)}</p></div><button class="primary" ${next.document ? `data-${next.prepare?'prepare':'open'}-document="${next.document}"` : `data-go-section="${next.action}"`}>${escapeHtml(next.label)}</button></div>`;
     const recent = state.documents.slice(0, 6);
-    els['recent-documents'].innerHTML = recent.length ? documentTable(recent, false) : '<div class="empty">Aún no hay actividad.</div>';
+    els['recent-documents'].innerHTML = recent.length ? documentTable(recent, false) : '<div class="empty">Aún no hay documentos.</div>';
+  }
+
+  function renderOnboarding() {
+    const profileComplete = Boolean((state.profile.full_name || '').trim() && (state.profile.department || '').trim());
+    const needsSignature = state.profile.role === 'signer' && !state.signatures.length;
+    let html = '';
+    if (!profileComplete) html = `<div class="onboarding-card"><div><h3>1. Completa tu identidad</h3><p>Agrega nombre y departamento para que aparezcan correctamente en los documentos.</p></div><span class="pill warning">Pendiente</span></div>`;
+    else if (state.profile.status !== 'active') html = `<div class="onboarding-card"><div><h3>2. Espera la activación</h3><p>Un administrador debe asignarte una función antes de participar.</p></div><span class="pill warning">En revisión</span></div>`;
+    else if (needsSignature) html = `<div class="onboarding-card"><div><h3>3. Registra tu firma</h3><p>Tu función es Firmante. Dibuja y guarda una firma para poder completar tareas.</p></div><span class="pill warning">Requerido</span></div>`;
+    else html = `<div class="onboarding-card"><div><h3>Tu cuenta está lista</h3><p>Perfil, permisos y firma están configurados.</p></div><span class="pill success">Completo</span></div>`;
+    els['profile-onboarding'].innerHTML = html;
   }
 
   function filteredDocuments() {
@@ -285,10 +357,13 @@
   }
 
   function renderTasks() {
-    const tasks = state.tasks;
-    els['tasks-table'].innerHTML = tasks.length ? `<div class="table-wrap"><table><thead><tr><th>Documento</th><th>Mi función</th><th>Secuencia</th><th>Estado</th><th></th></tr></thead><tbody>
-      ${tasks.map(t => `<tr><td><strong>${escapeHtml(t.documents.title)}</strong></td><td>${escapeHtml(participantRoleLabels[t.participant_role])}</td><td>${t.sequence}</td><td>${pill(t.documents.status)}</td><td><button class="secondary" data-open-document="${t.document_id}">Abrir</button></td></tr>`).join('')}
-    </tbody></table></div>` : '<div class="empty">No tienes acciones pendientes.</div>';
+    const tasks = [...state.tasks].sort((a,b) => Number(b.is_actionable)-Number(a.is_actionable));
+    els['tasks-table'].innerHTML = tasks.length ? tasks.map(task => {
+      const label = task.participant_role === 'approver' ? 'Aprobación' : 'Firma';
+      const icon = task.participant_role === 'approver' ? '✓' : '✍';
+      const buttonLabel = task.is_actionable ? (task.participant_role === 'approver' ? 'Revisar para aprobar' : 'Revisar para firmar') : 'Ver proceso';
+      return `<article class="task-card ${task.is_actionable?'actionable':''}"><div class="task-badge">${icon}</div><div><h3>${escapeHtml(task.documents.title)}</h3><div class="task-meta"><span class="pill">${label}</span>${pill(task.documents.status)}<span class="small muted">Turno ${task.sequence}</span></div>${task.waiting_reason?`<p class="task-wait">${escapeHtml(task.waiting_reason)}</p>`:''}</div><button class="${task.is_actionable?'primary':'secondary'}" data-open-document="${task.document_id}">${buttonLabel}</button></article>`;
+    }).join('') : '<div class="panel empty">No tienes tareas pendientes. El sistema te avisará cuando llegue tu turno.</div>';
   }
 
   function profileDraftKey() { return state.session?.user?.id ? `lumen-sign:profile-draft:${state.session.user.id}` : ''; }
@@ -353,67 +428,147 @@
     byId(`section-${section}`).classList.remove('hidden');
     qsa('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.section === section));
     const titles = {
-      dashboard: ['Resumen', 'Estado general de tus documentos'], documents: ['Documentos', 'Expedientes a los que tienes acceso'],
-      'new-document': ['Nuevo documento', 'Carga un PDF y define su flujo'], tasks: ['Mis pendientes', 'Aprobaciones y firmas asignadas'],
-      profile: ['Mi perfil y firma', 'Datos personales y firma registrada'], admin: ['Administración', 'Usuarios, estados y permisos']
+      dashboard: ['Inicio', 'Lo que requiere tu atención'], documents: ['Documentos', 'Consulta el estado de cada expediente'],
+      'new-document': ['Crear documento', 'Asistente paso a paso'], tasks: ['Mis tareas', 'Solo se habilita la acción de tu turno'],
+      profile: ['Perfil y firma', 'Identidad y firma registrada'], admin: ['Usuarios', 'Activa cuentas y asigna funciones']
     };
     els['page-title'].textContent = titles[section][0];
     els['page-subtitle'].textContent = titles[section][1];
     document.querySelector('.sidebar').classList.remove('open');
     if (section === 'profile') setTimeout(prepareCanvas, 50);
+    if (section === 'new-document') setWizardStep(state.wizardStep || 1);
   }
 
-  function activeProfilesOptions(selected = '') {
-    return state.profiles.filter(p => p.status === 'active').map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${escapeHtml(p.full_name || p.email)} — ${escapeHtml(roleLabels[p.role] || p.role)}</option>`).join('');
+  function allowedRolesForParticipant(role) {
+    if (role === 'approver') return ['approver','contracts','admin','superadmin'];
+    if (role === 'signer') return ['signer','contracts','admin','superadmin'];
+    if (role === 'editor') return ['contracts','admin','superadmin'];
+    return ['user','approver','signer','contracts','auditor','admin','superadmin'];
   }
 
-  function addParticipantRow(container, value = {}) {
+  function candidateOptions(role, selected = '') {
+    const allowed = allowedRolesForParticipant(role);
+    const candidates = state.workflowCandidates.filter(person => person.status === 'active' && allowed.includes(person.role));
+    return `<option value="">Selecciona una persona</option>${candidates.map(person => {
+      const signatureNote = role === 'signer' ? (person.has_signature ? ' · firma lista' : ' · falta registrar firma') : '';
+      return `<option value="${person.id}" ${person.id === selected ? 'selected' : ''}>${escapeHtml(person.full_name || person.email)} — ${escapeHtml(roleLabels[person.role] || person.role)}${signatureNote}</option>`;
+    }).join('')}`;
+  }
+
+  function addOrderedParticipant(container, role, userId = '') {
     const row = document.createElement('div');
-    row.className = 'participant-row';
-    row.innerHTML = `
-      <label>Usuario<select class="participant-user" required><option value="">Selecciona</option>${activeProfilesOptions(value.user_id)}</select></label>
-      <label>Función<select class="participant-role"><option value="approver" ${value.participant_role==='approver'?'selected':''}>Aprobador</option><option value="signer" ${value.participant_role==='signer'?'selected':''}>Firmante</option><option value="editor" ${value.participant_role==='editor'?'selected':''}>Editor</option><option value="viewer" ${value.participant_role==='viewer'?'selected':''}>Consulta</option></select></label>
-      <label>Secuencia<input class="participant-sequence" type="number" min="1" max="99" value="${Number(value.sequence || 1)}" required></label>
-      <button class="danger remove-participant" type="button">Quitar</button>`;
+    row.className = 'ordered-row';
+    row.dataset.role = role;
+    row.innerHTML = `<span class="order-number">1</span><label><span class="small">${role === 'approver' ? 'Aprobador' : 'Firmante'}</span><select class="ordered-user" data-participant-role="${role}" required>${candidateOptions(role,userId)}</select><span class="candidate-note">${role === 'approver' ? 'Debe tener rol Aprobador, Contratos o Administrador.' : 'Debe tener rol Firmante, Contratos o Administrador.'}</span></label><div class="order-actions"><button class="secondary move-up" type="button" title="Subir">↑</button><button class="secondary move-down" type="button" title="Bajar">↓</button><button class="danger remove-ordered" type="button" title="Quitar">×</button></div>`;
     container.appendChild(row);
+    renumberOrdered(container);
   }
 
-  function readParticipantRows(container) {
-    return qsa('.participant-row', container).map(row => ({
-      user_id: row.querySelector('.participant-user').value,
-      participant_role: row.querySelector('.participant-role').value,
-      sequence: Number(row.querySelector('.participant-sequence').value)
-    })).filter(p => p.user_id);
+  function renumberOrdered(container) {
+    qsa('.ordered-row', container).forEach((row,index) => {
+      row.querySelector('.order-number').textContent = String(index+1);
+      row.querySelector('.move-up').disabled = index === 0;
+      row.querySelector('.move-down').disabled = index === qsa('.ordered-row',container).length-1;
+    });
+  }
+
+  function handleOrderedListClick(event, container) {
+    const row = event.target.closest('.ordered-row');
+    if (!row) return;
+    if (event.target.closest('.remove-ordered')) row.remove();
+    if (event.target.closest('.move-up') && row.previousElementSibling) container.insertBefore(row,row.previousElementSibling);
+    if (event.target.closest('.move-down') && row.nextElementSibling) container.insertBefore(row.nextElementSibling,row);
+    renumberOrdered(container);
+  }
+
+  function readOrderedParticipants(approverContainer, signerContainer, workflowMode = 'approval_signature') {
+    const read = (container,role) => qsa('.ordered-row',container).map((row,index) => ({ user_id:row.querySelector('.ordered-user').value, participant_role:role, sequence:index+1 })).filter(item => item.user_id);
+    const approvers = workflowMode === 'signature_only' ? [] : read(approverContainer,'approver');
+    const signers = read(signerContainer,'signer');
+    return [...approvers,...signers];
+  }
+
+  function workflowMode() {
+    return document.querySelector('input[name="workflow-mode"]:checked')?.value || 'approval_signature';
+  }
+
+  function setWorkflowMode(mode) {
+    qsa('.workflow-card').forEach(card => card.classList.toggle('selected', card.querySelector('input').value === mode));
+    const signatureOnly = mode === 'signature_only';
+    els['approval-stage'].classList.toggle('hidden', signatureOnly);
+    if (!signatureOnly && !qsa('.ordered-row',els['approvers-builder']).length) addOrderedParticipant(els['approvers-builder'],'approver');
+  }
+
+  function setWizardStep(step) {
+    state.wizardStep = Math.max(1,Math.min(4,Number(step)||1));
+    qsa('[data-wizard-step]').forEach(panel => panel.classList.toggle('hidden', Number(panel.dataset.wizardStep)!==state.wizardStep));
+    qsa('[data-step-indicator]').forEach(item => {
+      const value = Number(item.dataset.stepIndicator);
+      item.classList.toggle('active',value===state.wizardStep);
+      item.classList.toggle('done',value<state.wizardStep);
+    });
+    els['wizard-back'].classList.toggle('hidden',state.wizardStep===1);
+    els['wizard-next'].classList.toggle('hidden',state.wizardStep===4);
+    els['wizard-create'].classList.toggle('hidden',state.wizardStep!==4);
+    els['wizard-message'].textContent = `Paso ${state.wizardStep} de 4`;
+    if (state.wizardStep===4) renderWizardReview();
+  }
+
+  function validateWizardStep(step) {
+    if (step===1) {
+      if (!byId('doc-title').value.trim()) throw new Error('Escribe el título del documento.');
+      validateFile(byId('doc-file').files[0],['application/pdf'],true);
+      const attachment=byId('doc-attachment').files[0]; if(attachment) validateFile(attachment,[],false);
+    }
+    if (step===3) {
+      const participants=readOrderedParticipants(els['approvers-builder'],els['signers-builder'],workflowMode());
+      if (workflowMode()==='approval_signature' && !participants.some(item=>item.participant_role==='approver')) throw new Error('Agrega al menos un aprobador.');
+      if (!participants.some(item=>item.participant_role==='signer')) throw new Error('Agrega al menos un firmante.');
+      const seen=new Set(); for(const item of participants){const key=`${item.participant_role}:${item.user_id}`;if(seen.has(key))throw new Error('Una persona no puede repetirse dentro de la misma etapa.');seen.add(key);}
+      for (const signer of participants.filter(item=>item.participant_role==='signer')) {
+        const candidate=state.workflowCandidates.find(person=>person.id===signer.user_id);
+        if (candidate && !candidate.has_signature) throw new Error(`${candidate.full_name||candidate.email} todavía no ha registrado una firma.`);
+      }
+    }
+  }
+
+  function renderWizardReview() {
+    const mode=workflowMode();
+    const participants=readOrderedParticipants(els['approvers-builder'],els['signers-builder'],mode);
+    const approvers=participants.filter(item=>item.participant_role==='approver');
+    const signers=participants.filter(item=>item.participant_role==='signer');
+    const people = items => items.length ? items.map((item,index)=>`<div class="review-person"><span>${index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${escapeHtml(roleLabels[state.profiles.find(p=>p.id===item.user_id)?.role]||'')}</small></div></div>`).join('') : '<p class="muted">Esta etapa se omitirá.</p>';
+    els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Aprobar y después firmar':'Solo firmas'}</strong></p><p class="muted">El orden queda bloqueado al iniciar.</p></div><div class="review-card"><h4>Aprobadores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
+  }
+
+  function resetDocumentWizard() {
+    els['new-document-form'].reset();
+    els['approvers-builder'].innerHTML=''; els['signers-builder'].innerHTML='';
+    document.querySelector('input[name="workflow-mode"][value="approval_signature"]').checked=true;
+    setWorkflowMode('approval_signature');
+    addOrderedParticipant(els['signers-builder'],'signer');
+    setWizardStep(1);
   }
 
   async function createDocument(event) {
     event.preventDefault();
     if (!isActive()) throw new Error('Tu cuenta no está activa.');
-    const file = byId('doc-file').files[0], attachment = byId('doc-attachment').files[0];
-    validateFile(file, ['application/pdf'], true); if (attachment) validateFile(attachment, [], false);
-    const participants = readParticipantRows(els['participants-builder']);
-    if (!participants.some(p => p.participant_role === 'signer')) throw new Error('Agrega al menos un firmante.');
-    const openPreparer = byId('prepare-after-save').checked;
-    let newDocId = null;
-    await run(async () => {
-      const { data: docId, error: createError } = await client.rpc('create_document', { p_title: byId('doc-title').value.trim(), p_description: byId('doc-description').value.trim(), p_category: byId('doc-category').value });
-      if (createError) throw createError; newDocId = docId;
-      const filePath = `${docId}/v1/${Date.now()}-${safeFilename(file.name)}`, hash = await sha256(file);
-      const { error: uploadError } = await client.storage.from('documents').upload(filePath, file, { contentType: file.type || 'application/pdf', upsert: false }); if (uploadError) throw uploadError;
-      const { error: attachError } = await client.rpc('attach_primary_file', { p_document_id: docId, p_file_path: filePath, p_file_name: file.name, p_file_hash: hash, p_mime_type: file.type || 'application/pdf', p_size_bytes: file.size }); if (attachError) throw attachError;
-      if (attachment) {
-        const path = `${docId}/attachments/${Date.now()}-${safeFilename(attachment.name)}`, attachmentHash = await sha256(attachment);
-        const { error: up2 } = await client.storage.from('documents').upload(path, attachment, { contentType: attachment.type || 'application/octet-stream' }); if (up2) throw up2;
-        const { error: a2 } = await client.rpc('add_document_attachment', { p_document_id: docId, p_file_path: path, p_file_name: attachment.name, p_file_hash: attachmentHash, p_mime_type: attachment.type || 'application/octet-stream', p_size_bytes: attachment.size }); if (a2) throw a2;
-      }
-      const { error: flowError } = await client.rpc('set_document_participants', { p_document_id: docId, p_items: participants }); if (flowError) throw flowError;
-      event.target.reset(); byId('prepare-after-save').checked = true; els['participants-builder'].innerHTML = '';
-      addParticipantRow(els['participants-builder'], { participant_role: 'approver', sequence: 1 }); addParticipantRow(els['participants-builder'], { participant_role: 'signer', sequence: 1 });
-      await refreshData(); navigate('documents');
-    }, 'Borrador creado. Ahora coloca los campos de firma.');
-    if (openPreparer && newDocId) await openPrepareDocument(newDocId);
+    validateWizardStep(1); validateWizardStep(3);
+    const file=byId('doc-file').files[0], attachment=byId('doc-attachment').files[0];
+    const participants=readOrderedParticipants(els['approvers-builder'],els['signers-builder'],workflowMode());
+    let newDocId=null;
+    await run(async()=>{
+      const {data:docId,error:createError}=await client.rpc('create_document',{p_title:byId('doc-title').value.trim(),p_description:byId('doc-description').value.trim(),p_category:byId('doc-category').value});
+      if(createError)throw createError; newDocId=docId;
+      const filePath=`${docId}/v1/${Date.now()}-${safeFilename(file.name)}`,hash=await sha256(file);
+      const upload=await client.storage.from('documents').upload(filePath,file,{contentType:file.type||'application/pdf',upsert:false});if(upload.error)throw upload.error;
+      const attached=await client.rpc('attach_primary_file',{p_document_id:docId,p_file_path:filePath,p_file_name:file.name,p_file_hash:hash,p_mime_type:file.type||'application/pdf',p_size_bytes:file.size});if(attached.error)throw attached.error;
+      if(attachment){const path=`${docId}/attachments/${Date.now()}-${safeFilename(attachment.name)}`,attachmentHash=await sha256(attachment);const up=await client.storage.from('documents').upload(path,attachment,{contentType:attachment.type||'application/octet-stream'});if(up.error)throw up.error;const rec=await client.rpc('add_document_attachment',{p_document_id:docId,p_file_path:path,p_file_name:attachment.name,p_file_hash:attachmentHash,p_mime_type:attachment.type||'application/octet-stream',p_size_bytes:attachment.size});if(rec.error)throw rec.error;}
+      const flow=await client.rpc('set_document_participants',{p_document_id:docId,p_items:participants});if(flow.error)throw flow.error;
+      resetDocumentWizard(); await refreshData(); navigate('documents');
+    },'Borrador creado. Ahora coloca los campos de firma.');
+    if(newDocId)await openPrepareDocument(newDocId);
   }
-
 
   function validateFile(file, mimeTypes = [], required = false) {
     if (!file && required) throw new Error('Selecciona un archivo.');
@@ -425,16 +580,17 @@
   async function openDocument(id) {
     state.activeDocumentId = id;
     await run(async () => {
-      const [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes] = await Promise.all([
+      const [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes, fieldsRes] = await Promise.all([
         client.from('documents').select('*').eq('id', id).single(),
         client.from('document_participants').select('*').eq('document_id', id).order('sequence'),
         client.from('document_versions').select('*').eq('document_id', id).order('version_number', { ascending: false }),
         client.from('document_attachments').select('*').eq('document_id', id).order('created_at', { ascending: false }),
         client.from('audit_events').select('*').eq('document_id', id).order('created_at', { ascending: false }),
-        client.from('document_signatures').select('*').eq('document_id', id).order('signed_at', { ascending: false })
+        client.from('document_signatures').select('*').eq('document_id', id).order('signed_at', { ascending: false }),
+        client.from('document_fields').select('*').eq('document_id', id)
       ]);
-      [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes].forEach(r => { if (r.error) throw r.error; });
-      renderDocumentDetail(docRes.data, participantsRes.data || [], versionsRes.data || [], attachmentsRes.data || [], eventsRes.data || [], signaturesRes.data || []);
+      [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes, fieldsRes].forEach(r => { if (r.error) throw r.error; });
+      renderDocumentDetail(docRes.data, participantsRes.data || [], versionsRes.data || [], attachmentsRes.data || [], eventsRes.data || [], signaturesRes.data || [], fieldsRes.data || []);
       els['document-dialog'].showModal();
     });
   }
@@ -444,37 +600,50 @@
     return p?.full_name || p?.email || 'Usuario';
   }
 
-  function renderDocumentDetail(doc, participants, versions, attachments, events, signatures) {
-    const me = state.session.user.id;
-    const myApproval = participants.find(p => p.user_id === me && p.participant_role === 'approver' && p.action_status === 'pending');
-    const mySignature = participants.find(p => p.user_id === me && p.participant_role === 'signer' && p.action_status === 'pending');
-    const isAssignedEditor = participants.some(p => p.user_id === me && p.participant_role === 'editor');
-    const canConfigure = doc.status === 'draft' && (doc.owner_id === me || isAdmin() || isContracts() || isAssignedEditor);
-    const canReplace = (doc.status === 'draft' && (doc.owner_id === me || isAdmin() || isContracts() || isAssignedEditor))
-      || (doc.status === 'rejected' && (isAdmin() || isContracts()));
-    const actions = [
-      doc.active_file_path ? `<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name || 'documento.pdf')}">Descargar actual</button>` : '',
-      canReplace ? `<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>` : '',
-      canConfigure ? `<button class="secondary" data-configure-flow="${doc.id}">Configurar flujo</button><button class="secondary" data-prepare-document="${doc.id}">Preparar firmas</button><button class="primary" data-submit-document="${doc.id}">Enviar a flujo</button>` : '',
-      myApproval && doc.status === 'awaiting_approval' ? `<button class="primary" data-approve-document="${doc.id}">Aprobar</button><button class="danger" data-reject-document="${doc.id}">Rechazar</button>` : '',
-      mySignature && doc.status === 'awaiting_signature' ? `<button class="primary" data-sign-document="${doc.id}">Revisar y firmar</button>` : ''
-    ].join('');
+  function renderDocumentDetail(doc, participants, versions, attachments, events, signatures, fields = []) {
+    const me=state.session.user.id;
+    const currentRole=doc.status==='awaiting_approval'?'approver':doc.status==='awaiting_signature'?'signer':null;
+    const stagePending=participants.filter(item=>item.participant_role===currentRole&&item.action_status==='pending');
+    const minSequence=stagePending.length?Math.min(...stagePending.map(item=>Number(item.sequence))):null;
+    const myApproval=participants.find(item=>item.user_id===me&&item.participant_role==='approver'&&item.action_status==='pending'&&Number(item.sequence)===minSequence);
+    const mySignature=participants.find(item=>item.user_id===me&&item.participant_role==='signer'&&item.action_status==='pending'&&Number(item.sequence)===minSequence);
+    const isAssignedEditor=participants.some(item=>item.user_id===me&&item.participant_role==='editor');
+    const canConfigure=doc.status==='draft'&&(doc.owner_id===me||isAdmin()||isContracts()||isAssignedEditor);
+    const canReplace=(doc.status==='draft'&&(doc.owner_id===me||isAdmin()||isContracts()||isAssignedEditor))||(doc.status==='rejected'&&(isAdmin()||isContracts()));
+    const approvers=participants.filter(item=>item.participant_role==='approver').sort((a,b)=>a.sequence-b.sequence);
+    const signers=participants.filter(item=>item.participant_role==='signer').sort((a,b)=>a.sequence-b.sequence);
+    const hasFields=fields.length>0;
+    const processSteps=[
+      {key:'draft',label:'Preparación'},
+      {key:'approval',label:approvers.length?'Aprobación':'Sin aprobación'},
+      {key:'signature',label:'Firmas'},
+      {key:'completed',label:'Completado'}
+    ];
+    const rank={draft:0,rejected:0,awaiting_approval:1,awaiting_signature:2,completed:3,cancelled:3};
+    const currentRank=rank[doc.status]??0;
+    const track=processSteps.map((step,index)=>`<div class="process-step ${index<currentRank?'done':index===currentRank?'current':'blocked'}">${index+1}. ${step.label}</div>`).join('');
+    let guidance='';
+    if(doc.status==='draft')guidance=hasFields?'Los campos están listos. Puedes iniciar el proceso.':'El siguiente paso es colocar los campos de firma sobre el PDF.';
+    else if(doc.status==='awaiting_approval')guidance=myApproval?'Es tu turno de revisar y decidir.':'El documento está esperando la aprobación que corresponde por orden.';
+    else if(doc.status==='awaiting_signature')guidance=mySignature?'Es tu turno de completar los campos y firmar.':'El documento está esperando la firma que corresponde por orden.';
+    else if(doc.status==='completed')guidance='El proceso terminó. La versión actual contiene las firmas aplicadas.';
+    else if(doc.status==='rejected')guidance='El documento fue rechazado. Contratos o un administrador debe corregirlo.';
 
-    els['document-detail'].innerHTML = `
-      <div class="stack">
-        <div><h2>${escapeHtml(doc.title)}</h2><div class="button-row">${actions}</div></div>
-        <div class="detail-grid">
-          <div><strong>Estado</strong><p>${pill(doc.status)}</p></div><div><strong>Tipo</strong><p>${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category] || doc.category)}</p></div>
-          <div><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div><strong>Versión actual</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div>
-          <div><strong>Creado</strong><p>${fmtDate(doc.created_at)}</p></div><div><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div>
-        </div>
-        <div><strong>Descripción</strong><p>${escapeHtml(doc.description || 'Sin descripción')}</p></div>
-        <div><h3>Participantes</h3>${participants.length ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Función</th><th>Secuencia</th><th>Estado</th><th>Fecha</th></tr></thead><tbody>${participants.map(p => `<tr><td>${escapeHtml(profileName(p.user_id))}</td><td>${escapeHtml(participantRoleLabels[p.participant_role])}</td><td>${p.sequence}</td><td>${pill(p.action_status)}</td><td>${fmtDate(p.acted_at)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Sin participantes.</div>'}</div>
-        <div><h3>Versiones</h3>${versions.length ? `<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash SHA-256</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(v => `<tr><td>v${v.version_number}</td><td>${escapeHtml(v.file_name)}</td><td><code title="${escapeHtml(v.file_hash)}">${escapeHtml((v.file_hash || '').slice(0,16))}…</code></td><td>${fmtDate(v.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(v.file_path)}" data-download-name="${escapeHtml(v.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Sin versiones.</div>'}</div>
-        <div><h3>Anexos</h3>${attachments.length ? attachments.map(a => `<div class="signature-card"><span>${escapeHtml(a.file_name)} · ${fmtBytes(a.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(a.file_path)}" data-download-name="${escapeHtml(a.file_name)}">Descargar</button></div>`).join('') : '<p class="muted">Sin anexos.</p>'}</div>
-        <div><h3>Firmas aplicadas</h3>${signatures.length ? signatures.map(s => `<div class="timeline-item"><strong>${escapeHtml(profileName(s.signer_id))}</strong><p>${fmtDate(s.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((s.file_hash || '').slice(0,24))}…</p></div>`).join('') : '<p class="muted">Aún no hay firmas.</p>'}</div>
-        <div><h3>Historial</h3><div class="timeline">${events.length ? events.map(e => `<div class="timeline-item"><strong>${escapeHtml(eventLabel(e.action))}</strong><p>${escapeHtml(profileName(e.actor_id))} · ${fmtDate(e.created_at)}</p>${e.metadata?.comment ? `<p>${escapeHtml(e.metadata.comment)}</p>` : ''}</div>`).join('') : '<p class="muted">Sin eventos.</p>'}</div></div>
-      </div>`;
+    const primary=[];
+    if(canConfigure&&!hasFields)primary.push(`<button class="primary" data-prepare-document="${doc.id}">Continuar: colocar campos</button>`);
+    if(canConfigure&&hasFields)primary.push(`<button class="primary" data-submit-document="${doc.id}">Iniciar proceso</button>`);
+    if(myApproval)primary.push(`<button class="primary" data-approve-document="${doc.id}">Aprobar documento</button><button class="danger" data-reject-document="${doc.id}">Rechazar</button>`);
+    if(mySignature)primary.push(`<button class="primary" data-sign-document="${doc.id}">Revisar y firmar</button>`);
+    if(doc.status==='completed'&&doc.active_file_path)primary.push(`<button class="primary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar PDF final</button>`);
+    const secondary=[
+      doc.active_file_path&&doc.status!=='completed'?`<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar actual</button>`:'',
+      canConfigure&&hasFields?`<button class="secondary" data-prepare-document="${doc.id}">Editar campos</button>`:'',
+      canConfigure?`<button class="secondary" data-configure-flow="${doc.id}">Cambiar responsables</button>`:'',
+      canReplace?`<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>`:''
+    ].join('');
+    const participantList=(items,title,letter)=>`<div class="participant-group"><h3>${title}</h3>${items.length?items.map((item,index)=>`<div class="participant-item"><span>${index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${fmtDate(item.acted_at)}</small></div>${pill(item.action_status)}</div>`).join(''):'<p class="muted">Esta etapa se omitió.</p>'}</div>`;
+
+    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div></div><div class="participant-groups">${participantList(approvers,'Primero: aprobadores','A')}${participantList(signers,'Después: firmantes','F')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
   }
 
   function eventLabel(action) {
@@ -519,26 +688,22 @@
   }
 
   async function configureFlow(docId) {
-    state.flowDocumentId = docId;
-    const { data, error } = await client.from('document_participants').select('*').eq('document_id', docId).order('sequence');
-    if (error) throw error;
-    els['flow-builder'].innerHTML = '';
-    (data || []).forEach(p => addParticipantRow(els['flow-builder'], p));
-    if (!(data || []).length) addParticipantRow(els['flow-builder'], { participant_role: 'signer', sequence: 1 });
-    if (els['document-dialog'].open) els['document-dialog'].close();
+    state.flowDocumentId=docId;
+    const {data,error}=await client.from('document_participants').select('*').eq('document_id',docId).order('sequence');
+    if(error)throw error;
+    els['flow-approvers-builder'].innerHTML='';els['flow-signers-builder'].innerHTML='';
+    (data||[]).filter(item=>item.participant_role==='approver').forEach(item=>addOrderedParticipant(els['flow-approvers-builder'],'approver',item.user_id));
+    (data||[]).filter(item=>item.participant_role==='signer').forEach(item=>addOrderedParticipant(els['flow-signers-builder'],'signer',item.user_id));
+    if(!qsa('.ordered-row',els['flow-signers-builder']).length)addOrderedParticipant(els['flow-signers-builder'],'signer');
+    if(els['document-dialog'].open)els['document-dialog'].close();
     els['flow-dialog'].showModal();
   }
 
   async function saveFlow() {
-    const items = readParticipantRows(els['flow-builder']);
-    if (!items.some(p => p.participant_role === 'signer')) throw new Error('Agrega al menos un firmante.');
-    await run(async () => {
-      const { error } = await client.rpc('set_document_participants', { p_document_id: state.flowDocumentId, p_items: items });
-      if (error) throw error;
-      els['flow-dialog'].close();
-      await refreshData();
-      await openDocument(state.flowDocumentId);
-    }, 'Flujo actualizado.');
+    const mode=qsa('.ordered-row',els['flow-approvers-builder']).length?'approval_signature':'signature_only';
+    const items=readOrderedParticipants(els['flow-approvers-builder'],els['flow-signers-builder'],mode);
+    if(!items.some(item=>item.participant_role==='signer'))throw new Error('Agrega al menos un firmante.');
+    await run(async()=>{const {error}=await client.rpc('set_document_participants',{p_document_id:state.flowDocumentId,p_items:items});if(error)throw error;els['flow-dialog'].close();await refreshData();await openDocument(state.flowDocumentId);},'Responsables actualizados.');
   }
 
   async function submitDocument(id) {
@@ -769,8 +934,19 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures()]);
     renderAll();
+  }
+
+  function bindPasswordHold(button,input) {
+    if(!button||!input)return;
+    const show=event=>{event.preventDefault();input.type='text';button.classList.add('revealing');};
+    const hide=()=>{input.type='password';button.classList.remove('revealing');};
+    button.addEventListener('pointerdown',show);
+    ['pointerup','pointercancel','pointerleave','blur'].forEach(type=>button.addEventListener(type,hide));
+    button.addEventListener('keydown',event=>{if(event.key===' '||event.key==='Enter')show(event);});
+    button.addEventListener('keyup',hide);
+    document.addEventListener('pointerup',hide);
   }
 
   function bindEvents() {
@@ -810,10 +986,19 @@
     els['document-search'].addEventListener('input', renderDocuments);
     els['document-status-filter'].addEventListener('change', renderDocuments);
     els['new-document-form'].addEventListener('submit', createDocument);
-    els['add-participant'].addEventListener('click', () => addParticipantRow(els['participants-builder']));
-    els['participants-builder'].addEventListener('click', e => { if (e.target.classList.contains('remove-participant')) e.target.closest('.participant-row').remove(); });
-    els['flow-add-participant'].addEventListener('click', () => addParticipantRow(els['flow-builder']));
-    els['flow-builder'].addEventListener('click', e => { if (e.target.classList.contains('remove-participant')) e.target.closest('.participant-row').remove(); });
+    bindPasswordHold(els['login-password-toggle'],byId('login-password'));
+    bindPasswordHold(els['register-password-toggle'],byId('register-password'));
+    els['wizard-next'].addEventListener('click',()=>{try{validateWizardStep(state.wizardStep);setWizardStep(state.wizardStep+1);}catch(error){toast(error.message,true);}});
+    els['wizard-back'].addEventListener('click',()=>setWizardStep(state.wizardStep-1));
+    qsa('input[name="workflow-mode"]').forEach(input=>input.addEventListener('change',()=>setWorkflowMode(input.value)));
+    els['add-approver'].addEventListener('click',()=>addOrderedParticipant(els['approvers-builder'],'approver'));
+    els['add-signer'].addEventListener('click',()=>addOrderedParticipant(els['signers-builder'],'signer'));
+    els['approvers-builder'].addEventListener('click',event=>handleOrderedListClick(event,els['approvers-builder']));
+    els['signers-builder'].addEventListener('click',event=>handleOrderedListClick(event,els['signers-builder']));
+    els['flow-add-approver'].addEventListener('click',()=>{els['flow-approval-stage'].classList.remove('hidden');addOrderedParticipant(els['flow-approvers-builder'],'approver');});
+    els['flow-add-signer'].addEventListener('click',()=>addOrderedParticipant(els['flow-signers-builder'],'signer'));
+    els['flow-approvers-builder'].addEventListener('click',event=>handleOrderedListClick(event,els['flow-approvers-builder']));
+    els['flow-signers-builder'].addEventListener('click',event=>handleOrderedListClick(event,els['flow-signers-builder']));
     els['save-flow'].addEventListener('click', saveFlow);
     els['profile-form'].addEventListener('submit', updateProfile);
     ['profile-name','profile-department','profile-phone'].forEach(id => byId(id).addEventListener('input', saveProfileDraft));
@@ -833,6 +1018,7 @@
     els['refresh-users'].addEventListener('click', async () => { await run(async () => { await loadProfiles(); renderAdminUsers(); }, 'Lista actualizada.'); });
 
     document.addEventListener('click', async e => {
+      const go = e.target.closest('[data-go-section]'); if (go) return navigate(go.dataset.goSection);
       const open = e.target.closest('[data-open-document]'); if (open) return openDocument(open.dataset.openDocument);
       const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName);
       const replace = e.target.closest('[data-replace-document]'); if (replace) return replaceDocumentFile(replace.dataset.replaceDocument);
@@ -871,8 +1057,7 @@
   async function init() {
     cacheElements();
     bindEvents();
-    addParticipantRow(els['participants-builder'], { participant_role: 'approver', sequence: 1 });
-    addParticipantRow(els['participants-builder'], { participant_role: 'signer', sequence: 1 });
+    resetDocumentWizard();
     client.auth.onAuthStateChange((event, session) => {
       setTimeout(async () => {
         try { await handleRecoveryEvent(event); if(event==='TOKEN_REFRESHED'||event==='USER_UPDATED'){state.session=session;return;} await handleSession(session); }

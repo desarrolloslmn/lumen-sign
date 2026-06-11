@@ -13,36 +13,48 @@
   <main id="auth-view" class="auth-layout">
     <section class="brand-panel">
       <div class="brand-mark">L</div>
-      <h1>Lumen Sign</h1>
-      <p>Documentos, aprobaciones y firmas electrónicas internas.</p>
-      <ul>
-        <li>Archivos privados</li>
-        <li>Flujos de aprobación</li>
-        <li>Firma registrada por usuario</li>
-        <li>Historial y evidencia</li>
-      </ul>
+      <p class="eyebrow">Lumen Sign</p>
+      <h1>Aprueba y firma documentos sin perder el control.</h1>
+      <p class="brand-copy">Cada expediente sigue un proceso guiado: primero se revisa, después se aprueba y al final se firma.</p>
+      <div class="brand-points">
+        <div><span>1</span><strong>Sube el PDF</strong><small>El archivo queda privado.</small></div>
+        <div><span>2</span><strong>Define responsables</strong><small>El orden se aplica automáticamente.</small></div>
+        <div><span>3</span><strong>Coloca campos</strong><small>Cada firmante recibe sus espacios.</small></div>
+        <div><span>4</span><strong>Da seguimiento</strong><small>Historial, versiones y hash.</small></div>
+      </div>
     </section>
 
     <section class="auth-card">
-      <div class="tabs">
-        <button class="tab active" data-auth-tab="login">Ingresar</button>
-        <button class="tab" data-auth-tab="register">Crear cuenta</button>
+      <div class="auth-brand-mobile"><span class="brand-mark small-mark">L</span><strong>Lumen Sign</strong></div>
+      <div class="tabs" role="tablist" aria-label="Acceso">
+        <button class="tab active" data-auth-tab="login" type="button">Ingresar</button>
+        <button class="tab" data-auth-tab="register" type="button">Crear cuenta</button>
       </div>
 
       <form id="login-form" class="stack">
-        <h2>Bienvenido</h2>
+        <div>
+          <h2>Bienvenido</h2>
+          <p class="muted">Ingresa para revisar tus tareas y documentos.</p>
+        </div>
         <label>Correo
           <input id="login-email" type="email" autocomplete="email" required />
         </label>
         <label>Contraseña
-          <input id="login-password" type="password" autocomplete="current-password" required minlength="10" />
+          <span class="password-control">
+            <input id="login-password" type="password" autocomplete="current-password" required minlength="10" />
+            <button id="login-password-toggle" class="password-hold" type="button" aria-label="Mantén presionado para ver la contraseña" title="Mantén presionado para ver">👁</button>
+          </span>
+          <span class="hint">Mantén presionado el ojo para mostrarla.</span>
         </label>
-        <button class="primary" type="submit">Ingresar</button>
+        <button class="primary large" type="submit">Ingresar</button>
         <button id="forgot-password" class="link-button" type="button">Olvidé mi contraseña</button>
       </form>
 
       <form id="register-form" class="stack hidden">
-        <h2>Crear cuenta</h2>
+        <div>
+          <h2>Crear cuenta</h2>
+          <p class="muted">Confirma tu correo y un administrador asignará tu función.</p>
+        </div>
         <label>Nombre completo
           <input id="register-name" type="text" autocomplete="name" required maxlength="120" />
         </label>
@@ -50,10 +62,14 @@
           <input id="register-email" type="email" autocomplete="email" required />
         </label>
         <label>Contraseña
-          <input id="register-password" type="password" autocomplete="new-password" required minlength="10" />
+          <span class="password-control">
+            <input id="register-password" type="password" autocomplete="new-password" required minlength="10" />
+            <button id="register-password-toggle" class="password-hold" type="button" aria-label="Mantén presionado para ver la contraseña" title="Mantén presionado para ver">👁</button>
+          </span>
+          <span class="hint">Mínimo 10 caracteres, mayúscula, minúscula, número y símbolo.</span>
         </label>
-        <button class="primary" type="submit">Registrarme</button>
-        <p class="muted small">Las cuentas nuevas quedan pendientes hasta que un administrador las active.</p>
+        <button class="primary large" type="submit">Crear mi cuenta</button>
+        <p class="muted small">Por seguridad, las cuentas nuevas no reciben permisos hasta que un administrador las active.</p>
       </form>
     </section>
   </main>
@@ -62,12 +78,12 @@
     <aside class="sidebar">
       <div class="sidebar-brand"><span class="brand-mark small-mark">L</span><strong>Lumen Sign</strong></div>
       <nav id="main-nav">
-        <button data-section="dashboard" class="nav-item active">Resumen</button>
-        <button data-section="documents" class="nav-item">Documentos</button>
-        <button data-section="new-document" class="nav-item">Nuevo documento</button>
-        <button data-section="tasks" class="nav-item">Mis pendientes</button>
-        <button data-section="profile" class="nav-item">Mi perfil y firma</button>
-        <button data-section="admin" id="admin-nav" class="nav-item hidden">Administración</button>
+        <button data-section="dashboard" class="nav-item active"><span>⌂</span>Inicio</button>
+        <button data-section="tasks" class="nav-item"><span>✓</span>Mis tareas</button>
+        <button data-section="documents" class="nav-item"><span>▤</span>Documentos</button>
+        <button data-section="new-document" class="nav-item"><span>＋</span>Crear documento</button>
+        <button data-section="profile" class="nav-item"><span>◯</span>Perfil y firma</button>
+        <button data-section="admin" id="admin-nav" class="nav-item hidden"><span>⚙</span>Usuarios</button>
       </nav>
       <div class="sidebar-footer">
         <div id="sidebar-user" class="small"></div>
@@ -79,30 +95,39 @@
       <header class="topbar">
         <button id="menu-button" class="icon-button" aria-label="Abrir menú">☰</button>
         <div>
-          <h1 id="page-title">Resumen</h1>
-          <p id="page-subtitle" class="muted"></p>
+          <h1 id="page-title">Inicio</h1>
+          <p id="page-subtitle" class="muted">Lo que requiere tu atención.</p>
         </div>
         <span id="user-status-pill" class="pill"></span>
       </header>
 
       <div id="pending-banner" class="banner warning hidden">
-        Tu cuenta todavía no está activa. Puedes completar tu perfil, pero no crear ni firmar documentos.
+        <strong>Tu cuenta está confirmada, pero aún no tiene permisos.</strong>
+        <span>Completa tu perfil mientras un administrador activa tu cuenta.</span>
       </div>
 
       <section id="section-dashboard" class="page-section">
+        <div id="next-action-card"></div>
         <div id="stats-grid" class="stats-grid"></div>
         <div class="panel">
-          <div class="panel-header"><h2>Actividad reciente</h2></div>
+          <div class="panel-header"><div><p class="eyebrow dark">Actividad</p><h2>Documentos recientes</h2></div></div>
           <div id="recent-documents"></div>
         </div>
+      </section>
+
+      <section id="section-tasks" class="page-section hidden">
+        <div class="section-intro">
+          <div><p class="eyebrow dark">Tu bandeja</p><h2>Acciones en orden</h2><p class="muted">Solo se habilita la acción que corresponde a tu turno.</p></div>
+        </div>
+        <div id="tasks-table" class="task-list"></div>
       </section>
 
       <section id="section-documents" class="page-section hidden">
         <div class="panel">
           <div class="panel-header wrap">
-            <h2>Documentos disponibles</h2>
+            <div><p class="eyebrow dark">Expedientes</p><h2>Todos tus documentos</h2></div>
             <div class="toolbar">
-              <input id="document-search" type="search" placeholder="Buscar documento" />
+              <input id="document-search" type="search" placeholder="Buscar por título" />
               <select id="document-status-filter">
                 <option value="">Todos los estados</option>
                 <option value="draft">Borrador</option>
@@ -119,233 +144,197 @@
       </section>
 
       <section id="section-new-document" class="page-section hidden">
-        <form id="new-document-form" class="panel stack wide-form">
-          <div class="panel-header"><h2>Crear expediente</h2></div>
-          <div class="form-grid">
-            <label>Título
-              <input id="doc-title" required maxlength="180" placeholder="Ej. Contrato proveedor ABC" />
-            </label>
-            <label>Tipo
-              <select id="doc-category" required>
-                <option value="contract">Contrato</option>
-                <option value="invoice">Factura</option>
-                <option value="other">Otro</option>
-              </select>
-            </label>
+        <form id="new-document-form" class="wizard-shell" novalidate>
+          <div class="wizard-head">
+            <div><p class="eyebrow dark">Nuevo expediente</p><h2>Creación guiada</h2><p class="muted">Completa un paso a la vez. El sistema aplica el orden automáticamente.</p></div>
+            <ol id="wizard-steps" class="wizard-steps" aria-label="Pasos del proceso">
+              <li data-step-indicator="1" class="active"><span>1</span>Documento</li>
+              <li data-step-indicator="2"><span>2</span>Proceso</li>
+              <li data-step-indicator="3"><span>3</span>Personas</li>
+              <li data-step-indicator="4"><span>4</span>Revisar</li>
+            </ol>
           </div>
-          <label>Descripción
-            <textarea id="doc-description" rows="3" maxlength="1000"></textarea>
-          </label>
-          <label>Documento principal PDF
-            <input id="doc-file" type="file" accept="application/pdf,.pdf" required />
-            <span class="hint">Máximo configurado: <span id="max-file-label">6</span> MB.</span>
-          </label>
-          <label>XML de factura u otro anexo opcional
-            <input id="doc-attachment" type="file" accept=".xml,text/xml,application/xml,application/pdf,.pdf" />
-          </label>
 
-          <div class="subpanel">
-            <div class="panel-header wrap">
-              <div><h3>Participantes del flujo</h3><p class="muted small">Los aprobadores y firmantes se ejecutan por número de secuencia.</p></div>
-              <button id="add-participant" class="secondary" type="button">Agregar participante</button>
+          <section class="wizard-panel" data-wizard-step="1">
+            <div class="step-title"><span>1</span><div><h3>Datos y archivos</h3><p>Sube el PDF que circulará durante todo el proceso.</p></div></div>
+            <div class="form-grid">
+              <label>Título
+                <input id="doc-title" required maxlength="180" placeholder="Ej. Contrato proveedor ABC" />
+              </label>
+              <label>Tipo
+                <select id="doc-category" required>
+                  <option value="contract">Contrato</option>
+                  <option value="invoice">Factura</option>
+                  <option value="other">Otro</option>
+                </select>
+              </label>
             </div>
-            <div id="participants-builder" class="stack"></div>
-          </div>
+            <label>Descripción
+              <textarea id="doc-description" rows="3" maxlength="1000" placeholder="Explica brevemente el propósito del documento"></textarea>
+            </label>
+            <div class="file-grid">
+              <label class="file-drop">Documento principal PDF
+                <input id="doc-file" type="file" accept="application/pdf,.pdf" required />
+                <span>Selecciona un PDF de máximo <strong id="max-file-label">6</strong> MB</span>
+              </label>
+              <label class="file-drop secondary-drop">Anexo opcional
+                <input id="doc-attachment" type="file" accept=".xml,text/xml,application/xml,application/pdf,.pdf" />
+                <span>XML de factura u otro respaldo</span>
+              </label>
+            </div>
+          </section>
 
-          <label class="checkbox-row">
-            <input id="prepare-after-save" type="checkbox" checked />
-            Abrir el preparador visual después de guardar
-          </label>
-          <button class="primary" type="submit">Guardar borrador</button>
+          <section class="wizard-panel hidden" data-wizard-step="2">
+            <div class="step-title"><span>2</span><div><h3>Elige el proceso</h3><p>No se puede improvisar el orden después de enviar.</p></div></div>
+            <div class="workflow-options">
+              <label class="workflow-card selected">
+                <input type="radio" name="workflow-mode" value="approval_signature" checked />
+                <span class="workflow-icon">✓ → ✍</span>
+                <strong>Aprobar y después firmar</strong>
+                <small>Recomendado para contratos, facturas y documentos que requieren revisión.</small>
+                <ol><li>Los aprobadores revisan en orden.</li><li>Después firman los responsables.</li><li>Al final se genera el PDF completo.</li></ol>
+              </label>
+              <label class="workflow-card">
+                <input type="radio" name="workflow-mode" value="signature_only" />
+                <span class="workflow-icon">✍</span>
+                <strong>Solo firmas</strong>
+                <small>Para documentos que ya fueron autorizados fuera del sistema.</small>
+                <ol><li>Se omite la aprobación.</li><li>Los firmantes participan en orden.</li><li>El sistema cierra al terminar.</li></ol>
+              </label>
+            </div>
+            <div class="logic-note"><strong>Regla del sistema:</strong> nunca se puede firmar antes de terminar las aprobaciones cuando eliges el proceso recomendado.</div>
+          </section>
+
+          <section class="wizard-panel hidden" data-wizard-step="3">
+            <div class="step-title"><span>3</span><div><h3>Responsables</h3><p>El orden se calcula por la posición de cada persona en la lista.</p></div></div>
+            <div class="stage-grid">
+              <div id="approval-stage" class="stage-card">
+                <div class="stage-header"><div><span class="stage-number">A</span><div><h3>Aprobación</h3><p>Primero se revisa.</p></div></div><button id="add-approver" class="secondary" type="button">Agregar aprobador</button></div>
+                <div id="approvers-builder" class="ordered-list"></div>
+              </div>
+              <div class="stage-card">
+                <div class="stage-header"><div><span class="stage-number">F</span><div><h3>Firma</h3><p>Después se firma.</p></div></div><button id="add-signer" class="secondary" type="button">Agregar firmante</button></div>
+                <div id="signers-builder" class="ordered-list"></div>
+              </div>
+            </div>
+            <div class="logic-note"><strong>Cómo cambiar el orden:</strong> usa las flechas ↑ y ↓. No necesitas escribir números de secuencia.</div>
+          </section>
+
+          <section class="wizard-panel hidden" data-wizard-step="4">
+            <div class="step-title"><span>4</span><div><h3>Revisión final</h3><p>Después de crear el borrador colocarás visualmente los campos de firma.</p></div></div>
+            <div id="wizard-review" class="review-grid"></div>
+            <div class="next-process">
+              <span>Lo que sucederá después</span>
+              <ol><li>Se crea el borrador y se sube el PDF.</li><li>Se abre el visor para colocar firmas y campos.</li><li>Al guardar y enviar inicia la aprobación.</li><li>Solo al terminar se habilitan las firmas.</li></ol>
+            </div>
+          </section>
+
+          <footer class="wizard-footer">
+            <button id="wizard-back" class="secondary hidden" type="button">← Regresar</button>
+            <span id="wizard-message" class="muted small"></span>
+            <button id="wizard-next" class="primary" type="button">Continuar →</button>
+            <button id="wizard-create" class="primary hidden" type="submit">Crear borrador y colocar campos</button>
+          </footer>
         </form>
       </section>
 
-      <section id="section-tasks" class="page-section hidden">
-        <div class="panel">
-          <div class="panel-header"><h2>Acciones que requieren tu atención</h2></div>
-          <div id="tasks-table"></div>
-        </div>
-      </section>
-
       <section id="section-profile" class="page-section hidden">
+        <div id="profile-onboarding"></div>
         <div class="two-column">
           <form id="profile-form" class="panel stack">
-            <div class="panel-header"><h2>Datos personales</h2></div>
-            <label>Correo
-              <input id="profile-email" disabled />
-            </label>
-            <label>Nombre completo
-              <input id="profile-name" required maxlength="120" />
-            </label>
-            <label>Departamento
-              <input id="profile-department" maxlength="120" />
-            </label>
-            <label>Teléfono
-              <input id="profile-phone" maxlength="40" />
-            </label>
-            <div class="form-grid">
-              <label>Rol
-                <input id="profile-role" disabled />
-              </label>
-              <label>Estado
-                <input id="profile-status" disabled />
-              </label>
-            </div>
+            <div class="panel-header"><div><p class="eyebrow dark">Identidad</p><h2>Datos personales</h2></div></div>
+            <label>Correo<input id="profile-email" disabled /></label>
+            <label>Nombre completo<input id="profile-name" required maxlength="120" /></label>
+            <label>Departamento<input id="profile-department" maxlength="120" /></label>
+            <label>Teléfono<input id="profile-phone" maxlength="40" /></label>
+            <div class="form-grid"><label>Rol<input id="profile-role" disabled /></label><label>Estado<input id="profile-status" disabled /></label></div>
             <button class="primary" type="submit">Guardar perfil</button>
           </form>
 
           <div class="panel stack">
-            <div class="panel-header"><h2>Registrar firma</h2></div>
-            <p class="muted small">Firma dentro del recuadro con el mouse o con el dedo.</p>
+            <div class="panel-header"><div><p class="eyebrow dark">Firma</p><h2>Firma registrada</h2></div></div>
+            <p class="muted small">Dibuja dentro del recuadro con el mouse o con el dedo. Esta firma solo se usa cuando confirmas una tarea de firma.</p>
             <canvas id="signature-canvas" width="700" height="260"></canvas>
-            <label>Nombre de la firma
-              <input id="signature-label" maxlength="80" value="Firma principal" />
-            </label>
-            <div class="button-row">
-              <button id="clear-signature" class="secondary" type="button">Limpiar</button>
-              <button id="save-signature" class="primary" type="button">Guardar firma</button>
-            </div>
+            <label>Nombre de la firma<input id="signature-label" maxlength="80" value="Firma principal" /></label>
+            <div class="button-row"><button id="clear-signature" class="secondary" type="button">Limpiar</button><button id="save-signature" class="primary" type="button">Guardar firma</button></div>
             <div id="signature-list"></div>
           </div>
         </div>
-        <div class="panel" style="margin-top:1rem;">
-          <div class="panel-header"><h2>Historial de documentos firmados</h2></div>
-          <div id="signed-history-table"></div>
-        </div>
+        <div class="panel profile-history"><div class="panel-header"><div><p class="eyebrow dark">Evidencia</p><h2>Documentos que firmaste</h2></div></div><div id="signed-history-table"></div></div>
       </section>
 
       <section id="section-admin" class="page-section hidden">
+        <div class="admin-guide">
+          <div><p class="eyebrow dark">Administración</p><h2>Personas y permisos</h2><p>Primero activa la cuenta y después asigna una función. El sistema filtra automáticamente quién puede aprobar o firmar.</p></div>
+          <div class="role-legend"><span><b>Aprobador</b> revisa y autoriza</span><span><b>Firmante</b> aplica su firma</span><span><b>Contratos</b> crea y corrige documentos</span></div>
+        </div>
         <div class="panel">
-          <div class="panel-header wrap">
-            <div><h2>Usuarios y permisos</h2><p class="muted small">Activa cuentas y asigna roles. Solo el superadministrador puede crear otros administradores.</p></div>
-            <button id="refresh-users" class="secondary" type="button">Actualizar</button>
-          </div>
+          <div class="panel-header wrap"><div><h2>Usuarios registrados</h2><p class="muted small">Solo el superadministrador puede crear otros administradores.</p></div><button id="refresh-users" class="secondary" type="button">Actualizar</button></div>
           <div id="admin-users-table"></div>
         </div>
       </section>
     </section>
   </div>
 
-  <dialog id="document-dialog" class="dialog">
+  <dialog id="document-dialog" class="dialog document-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
     <div id="document-detail"></div>
   </dialog>
 
-  <dialog id="flow-dialog" class="dialog">
+  <dialog id="flow-dialog" class="dialog flow-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
-    <div class="stack">
-      <h2>Configurar flujo</h2>
-      <p class="muted small">Solo puede cambiarse mientras el documento sea borrador.</p>
-      <div id="flow-builder" class="stack"></div>
-      <button id="flow-add-participant" class="secondary" type="button">Agregar participante</button>
-      <button id="save-flow" class="primary" type="button">Guardar flujo</button>
+    <div class="dialog-heading"><p class="eyebrow dark">Borrador</p><h2>Modificar responsables</h2><p class="muted">Solo está disponible antes de iniciar el proceso.</p></div>
+    <div class="stage-grid single">
+      <div id="flow-approval-stage" class="stage-card"><div class="stage-header"><div><span class="stage-number">A</span><div><h3>Aprobación</h3><p>Se ejecuta primero.</p></div></div><button id="flow-add-approver" class="secondary" type="button">Agregar</button></div><div id="flow-approvers-builder" class="ordered-list"></div></div>
+      <div class="stage-card"><div class="stage-header"><div><span class="stage-number">F</span><div><h3>Firma</h3><p>Se ejecuta después.</p></div></div><button id="flow-add-signer" class="secondary" type="button">Agregar</button></div><div id="flow-signers-builder" class="ordered-list"></div></div>
     </div>
+    <div class="dialog-footer"><button id="save-flow" class="primary" type="button">Guardar responsables</button></div>
   </dialog>
-
 
   <dialog id="prepare-dialog" class="dialog visual-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
     <div class="visual-header">
-      <div>
-        <h2>Preparar campos de firma</h2>
-        <p class="muted">Selecciona firmante y tipo de campo. Después colócalo, arrástralo y cambia su tamaño sobre el PDF.</p>
-      </div>
-      <div class="button-row">
-        <button id="prepare-save" class="secondary" type="button">Guardar campos</button>
-        <button id="prepare-save-submit" class="primary" type="button">Guardar y enviar</button>
-      </div>
+      <div><p class="eyebrow dark">Paso final de configuración</p><h2>Coloca los campos sobre el PDF</h2><p class="muted">Asigna cada campo a una persona. Al enviar, el proceso queda bloqueado.</p></div>
+      <div class="button-row"><button id="prepare-save" class="secondary" type="button">Guardar borrador</button><button id="prepare-save-submit" class="primary" type="button">Guardar e iniciar proceso</button></div>
     </div>
     <div class="visual-layout">
       <aside class="field-panel">
-        <label>Firmante
-          <select id="field-assignee"></select>
-        </label>
-        <label>Tipo de campo
-          <select id="field-type">
-            <option value="signature">Firma</option>
-            <option value="initials">Iniciales</option>
-            <option value="date">Fecha</option>
-            <option value="name">Nombre</option>
-            <option value="text">Texto</option>
-            <option value="checkbox">Casilla</option>
-          </select>
-        </label>
-        <label>Etiqueta
-          <input id="field-label" maxlength="120" placeholder="Ej. Firma del proveedor" />
-        </label>
-        <label class="checkbox-row">
-          <input id="field-required" type="checkbox" checked />
-          Obligatorio
-        </label>
-        <button id="add-field" class="primary" type="button">Agregar en esta página</button>
+        <div class="field-step"><span>1</span><strong>Selecciona al firmante</strong></div>
+        <label>Firmante<select id="field-assignee"></select></label>
+        <div class="field-step"><span>2</span><strong>Selecciona el campo</strong></div>
+        <label>Tipo de campo<select id="field-type"><option value="signature">Firma</option><option value="initials">Iniciales</option><option value="date">Fecha</option><option value="name">Nombre</option><option value="text">Texto</option><option value="checkbox">Casilla</option></select></label>
+        <label>Etiqueta<input id="field-label" maxlength="120" placeholder="Ej. Firma del proveedor" /></label>
+        <label class="checkbox-row"><input id="field-required" type="checkbox" checked />Obligatorio</label>
+        <button id="add-field" class="primary full" type="button">Agregar campo en esta página</button>
         <hr />
         <div id="selected-field-panel" class="stack hidden">
-          <strong>Campo seleccionado</strong>
-          <label>Firmante
-            <select id="selected-field-assignee"></select>
-          </label>
-          <label>Tipo
-            <select id="selected-field-type">
-              <option value="signature">Firma</option>
-              <option value="initials">Iniciales</option>
-              <option value="date">Fecha</option>
-              <option value="name">Nombre</option>
-              <option value="text">Texto</option>
-              <option value="checkbox">Casilla</option>
-            </select>
-          </label>
-          <label>Etiqueta
-            <input id="selected-field-label" maxlength="120" />
-          </label>
-          <label class="checkbox-row">
-            <input id="selected-field-required" type="checkbox" />
-            Obligatorio
-          </label>
+          <strong>Editar campo seleccionado</strong>
+          <label>Firmante<select id="selected-field-assignee"></select></label>
+          <label>Tipo<select id="selected-field-type"><option value="signature">Firma</option><option value="initials">Iniciales</option><option value="date">Fecha</option><option value="name">Nombre</option><option value="text">Texto</option><option value="checkbox">Casilla</option></select></label>
+          <label>Etiqueta<input id="selected-field-label" maxlength="120" /></label>
+          <label class="checkbox-row"><input id="selected-field-required" type="checkbox" />Obligatorio</label>
           <button id="delete-field" class="danger" type="button">Eliminar campo</button>
         </div>
-        <div class="field-help small muted">
-          <p><strong>Consejo:</strong> agrega al menos un campo de Firma para cada firmante.</p>
-          <p>Los campos se guardan como porcentajes para conservar su posición en cualquier pantalla.</p>
-        </div>
+        <div class="field-help small muted"><p><strong>Requisito:</strong> cada firmante debe tener al menos un campo Firma.</p><p>Arrastra el cuadro para moverlo y usa el punto de la esquina para cambiar el tamaño.</p></div>
       </aside>
       <section class="pdf-workspace">
-        <div class="pdf-toolbar">
-          <button id="prepare-prev-page" class="secondary" type="button">← Anterior</button>
-          <span>Página <strong id="prepare-page-number">1</strong> de <strong id="prepare-page-count">1</strong></span>
-          <button id="prepare-next-page" class="secondary" type="button">Siguiente →</button>
-          <button id="prepare-zoom-out" class="secondary" type="button">−</button>
-          <span id="prepare-zoom-label">100%</span>
-          <button id="prepare-zoom-in" class="secondary" type="button">+</button>
-        </div>
+        <div class="pdf-toolbar"><button id="prepare-prev-page" class="secondary" type="button">←</button><span>Página <strong id="prepare-page-number">1</strong> de <strong id="prepare-page-count">1</strong></span><button id="prepare-next-page" class="secondary" type="button">→</button><span class="toolbar-separator"></span><button id="prepare-zoom-out" class="secondary" type="button">−</button><span id="prepare-zoom-label">100%</span><button id="prepare-zoom-in" class="secondary" type="button">+</button></div>
         <div id="prepare-pages" class="pdf-pages"></div>
       </section>
     </div>
   </dialog>
 
-  <dialog id="sign-dialog" class="dialog visual-dialog">
+  <dialog id="sign-dialog" class="dialog visual-dialog sign-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
-    <div class="visual-header">
-      <div>
-        <h2>Revisar y firmar documento</h2>
-        <p class="muted">Completa tus campos resaltados. No podrás finalizar mientras falte un campo obligatorio.</p>
-      </div>
-      <button id="finish-signing" class="primary" type="button">Finalizar firma</button>
-    </div>
-    <div class="signing-summary">
-      <span id="sign-progress">0 de 0 campos completos</span>
-      <button id="next-required-field" class="secondary" type="button">Ir al siguiente campo</button>
-    </div>
+    <div class="visual-header"><div><p class="eyebrow dark">Tu turno</p><h2>Revisa y completa tus campos</h2><p class="muted">Los campos de otras personas están bloqueados. Solo podrás finalizar cuando completes los tuyos.</p></div><button id="finish-signing" class="primary" type="button">Finalizar mi firma</button></div>
+    <div class="signing-summary"><span id="sign-progress">0 de 0 campos completos</span><button id="next-required-field" class="secondary" type="button">Ir al siguiente campo</button></div>
     <div id="sign-pages" class="pdf-pages sign-pages"></div>
   </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-  <script>
-    if (window.pdfjsLib) {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-    }
-  </script>
+  <script>if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';</script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
