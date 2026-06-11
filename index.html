@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <title>Lumen Sign</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <main id="auth-view" class="auth-layout">
+    <section class="brand-panel">
+      <div class="brand-mark">L</div>
+      <h1>Lumen Sign</h1>
+      <p>Documentos, aprobaciones y firmas electrónicas internas.</p>
+      <ul>
+        <li>Archivos privados</li>
+        <li>Flujos de aprobación</li>
+        <li>Firma registrada por usuario</li>
+        <li>Historial y evidencia</li>
+      </ul>
+    </section>
+
+    <section class="auth-card">
+      <div class="tabs">
+        <button class="tab active" data-auth-tab="login">Ingresar</button>
+        <button class="tab" data-auth-tab="register">Crear cuenta</button>
+      </div>
+
+      <form id="login-form" class="stack">
+        <h2>Bienvenido</h2>
+        <label>Correo
+          <input id="login-email" type="email" autocomplete="email" required />
+        </label>
+        <label>Contraseña
+          <input id="login-password" type="password" autocomplete="current-password" required minlength="8" />
+        </label>
+        <button class="primary" type="submit">Ingresar</button>
+        <button id="forgot-password" class="link-button" type="button">Olvidé mi contraseña</button>
+      </form>
+
+      <form id="register-form" class="stack hidden">
+        <h2>Crear cuenta</h2>
+        <label>Nombre completo
+          <input id="register-name" type="text" autocomplete="name" required maxlength="120" />
+        </label>
+        <label>Correo
+          <input id="register-email" type="email" autocomplete="email" required />
+        </label>
+        <label>Contraseña
+          <input id="register-password" type="password" autocomplete="new-password" required minlength="8" />
+        </label>
+        <button class="primary" type="submit">Registrarme</button>
+        <p class="muted small">Las cuentas nuevas quedan pendientes hasta que un administrador las active.</p>
+      </form>
+    </section>
+  </main>
+
+  <div id="app-view" class="app-layout hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><span class="brand-mark small-mark">L</span><strong>Lumen Sign</strong></div>
+      <nav id="main-nav">
+        <button data-section="dashboard" class="nav-item active">Resumen</button>
+        <button data-section="documents" class="nav-item">Documentos</button>
+        <button data-section="new-document" class="nav-item">Nuevo documento</button>
+        <button data-section="tasks" class="nav-item">Mis pendientes</button>
+        <button data-section="profile" class="nav-item">Mi perfil y firma</button>
+        <button data-section="admin" id="admin-nav" class="nav-item hidden">Administración</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="sidebar-user" class="small"></div>
+        <button id="logout-button" class="secondary full" type="button">Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <section class="content">
+      <header class="topbar">
+        <button id="menu-button" class="icon-button" aria-label="Abrir menú">☰</button>
+        <div>
+          <h1 id="page-title">Resumen</h1>
+          <p id="page-subtitle" class="muted"></p>
+        </div>
+        <span id="user-status-pill" class="pill"></span>
+      </header>
+
+      <div id="pending-banner" class="banner warning hidden">
+        Tu cuenta todavía no está activa. Puedes completar tu perfil, pero no crear ni firmar documentos.
+      </div>
+
+      <section id="section-dashboard" class="page-section">
+        <div id="stats-grid" class="stats-grid"></div>
+        <div class="panel">
+          <div class="panel-header"><h2>Actividad reciente</h2></div>
+          <div id="recent-documents"></div>
+        </div>
+      </section>
+
+      <section id="section-documents" class="page-section hidden">
+        <div class="panel">
+          <div class="panel-header wrap">
+            <h2>Documentos disponibles</h2>
+            <div class="toolbar">
+              <input id="document-search" type="search" placeholder="Buscar documento" />
+              <select id="document-status-filter">
+                <option value="">Todos los estados</option>
+                <option value="draft">Borrador</option>
+                <option value="awaiting_approval">En aprobación</option>
+                <option value="awaiting_signature">En firma</option>
+                <option value="completed">Completado</option>
+                <option value="rejected">Rechazado</option>
+                <option value="cancelled">Cancelado</option>
+              </select>
+            </div>
+          </div>
+          <div id="documents-table"></div>
+        </div>
+      </section>
+
+      <section id="section-new-document" class="page-section hidden">
+        <form id="new-document-form" class="panel stack wide-form">
+          <div class="panel-header"><h2>Crear expediente</h2></div>
+          <div class="form-grid">
+            <label>Título
+              <input id="doc-title" required maxlength="180" placeholder="Ej. Contrato proveedor ABC" />
+            </label>
+            <label>Tipo
+              <select id="doc-category" required>
+                <option value="contract">Contrato</option>
+                <option value="invoice">Factura</option>
+                <option value="other">Otro</option>
+              </select>
+            </label>
+          </div>
+          <label>Descripción
+            <textarea id="doc-description" rows="3" maxlength="1000"></textarea>
+          </label>
+          <label>Documento principal PDF
+            <input id="doc-file" type="file" accept="application/pdf,.pdf" required />
+            <span class="hint">Máximo configurado: <span id="max-file-label">6</span> MB.</span>
+          </label>
+          <label>XML de factura u otro anexo opcional
+            <input id="doc-attachment" type="file" accept=".xml,text/xml,application/xml,application/pdf,.pdf" />
+          </label>
+
+          <div class="subpanel">
+            <div class="panel-header wrap">
+              <div><h3>Participantes del flujo</h3><p class="muted small">Los aprobadores y firmantes se ejecutan por número de secuencia.</p></div>
+              <button id="add-participant" class="secondary" type="button">Agregar participante</button>
+            </div>
+            <div id="participants-builder" class="stack"></div>
+          </div>
+
+          <label class="checkbox-row">
+            <input id="submit-immediately" type="checkbox" checked />
+            Enviar a aprobación o firma al terminar la carga
+          </label>
+          <button class="primary" type="submit">Guardar documento</button>
+        </form>
+      </section>
+
+      <section id="section-tasks" class="page-section hidden">
+        <div class="panel">
+          <div class="panel-header"><h2>Acciones que requieren tu atención</h2></div>
+          <div id="tasks-table"></div>
+        </div>
+      </section>
+
+      <section id="section-profile" class="page-section hidden">
+        <div class="two-column">
+          <form id="profile-form" class="panel stack">
+            <div class="panel-header"><h2>Datos personales</h2></div>
+            <label>Correo
+              <input id="profile-email" disabled />
+            </label>
+            <label>Nombre completo
+              <input id="profile-name" required maxlength="120" />
+            </label>
+            <label>Departamento
+              <input id="profile-department" maxlength="120" />
+            </label>
+            <label>Teléfono
+              <input id="profile-phone" maxlength="40" />
+            </label>
+            <div class="form-grid">
+              <label>Rol
+                <input id="profile-role" disabled />
+              </label>
+              <label>Estado
+                <input id="profile-status" disabled />
+              </label>
+            </div>
+            <button class="primary" type="submit">Guardar perfil</button>
+          </form>
+
+          <div class="panel stack">
+            <div class="panel-header"><h2>Registrar firma</h2></div>
+            <p class="muted small">Firma dentro del recuadro con el mouse o con el dedo.</p>
+            <canvas id="signature-canvas" width="700" height="260"></canvas>
+            <label>Nombre de la firma
+              <input id="signature-label" maxlength="80" value="Firma principal" />
+            </label>
+            <div class="button-row">
+              <button id="clear-signature" class="secondary" type="button">Limpiar</button>
+              <button id="save-signature" class="primary" type="button">Guardar firma</button>
+            </div>
+            <div id="signature-list"></div>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:1rem;">
+          <div class="panel-header"><h2>Historial de documentos firmados</h2></div>
+          <div id="signed-history-table"></div>
+        </div>
+      </section>
+
+      <section id="section-admin" class="page-section hidden">
+        <div class="panel">
+          <div class="panel-header wrap">
+            <div><h2>Usuarios y permisos</h2><p class="muted small">Activa cuentas y asigna roles. Solo el superadministrador puede crear otros administradores.</p></div>
+            <button id="refresh-users" class="secondary" type="button">Actualizar</button>
+          </div>
+          <div id="admin-users-table"></div>
+        </div>
+      </section>
+    </section>
+  </div>
+
+  <dialog id="document-dialog" class="dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
+    <div id="document-detail"></div>
+  </dialog>
+
+  <dialog id="flow-dialog" class="dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
+    <div class="stack">
+      <h2>Configurar flujo</h2>
+      <p class="muted small">Solo puede cambiarse mientras el documento sea borrador.</p>
+      <div id="flow-builder" class="stack"></div>
+      <button id="flow-add-participant" class="secondary" type="button">Agregar participante</button>
+      <button id="save-flow" class="primary" type="button">Guardar flujo</button>
+    </div>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
