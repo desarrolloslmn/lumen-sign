@@ -31,7 +31,9 @@
     signatureDrawing: false,
     profileDirty: false, loadedUserId: null, sessionLoadPromise: null,
     prepare: null, signing: null,
-    workflowCandidates: [], wizardStep: 1
+    workflowCandidates: [], wizardStep: 1,
+    notifications: [], conversations: [], activeConversationId: null, activeConversationMembers: [],
+    chatChannel: null, chatInboxChannel: null, notificationChannel: null, passwordResetEmail: '', passwordResetActive: false
   };
 
   const els = {};
@@ -56,6 +58,7 @@
   function cacheElements() {
     [
       'auth-view','app-view','login-form','register-form','forgot-password','logout-button','admin-nav',
+      'reset-panel','reset-request-form','reset-confirm-form','reset-email','reset-code','reset-password','reset-password-confirm','reset-back-login','reset-resend','reset-password-toggle','reset-password-confirm-toggle',
       'login-password-toggle','register-password-toggle','sidebar-user','user-status-pill','pending-banner',
       'next-action-card','stats-grid','recent-documents','documents-table','document-search','document-status-filter',
       'new-document-form','wizard-steps','wizard-back','wizard-next','wizard-create','wizard-message','wizard-review',
@@ -64,6 +67,7 @@
       'admin-users-table','refresh-users','document-dialog','document-detail','flow-dialog','flow-approval-stage',
       'flow-approvers-builder','flow-signers-builder','flow-add-approver','flow-add-signer','save-flow',
       'menu-button','main-nav','page-title','page-subtitle','toast',
+      'message-unread-badge','notification-unread-badge','new-conversation','conversation-list','chat-header','chat-messages','chat-form','chat-input','conversation-dialog','conversation-form','conversation-title','conversation-members','notifications-list','mark-all-notifications',
       'prepare-dialog','prepare-save','prepare-save-submit','field-assignee','field-type','field-label','field-required','add-field',
       'selected-field-panel','selected-field-assignee','selected-field-type','selected-field-label','selected-field-required','delete-field',
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
@@ -154,24 +158,41 @@
   }
 
   function switchAuthTab(tab) {
+    els['reset-panel'].classList.add('hidden');
     qsa('[data-auth-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.authTab === tab));
     els['login-form'].classList.toggle('hidden', tab !== 'login');
     els['register-form'].classList.toggle('hidden', tab !== 'register');
+    document.querySelector('.tabs').classList.remove('hidden');
+  }
+
+  function showResetPanel(email = '') {
+    qsa('[data-auth-tab]').forEach(btn => btn.classList.remove('active'));
+    els['login-form'].classList.add('hidden');
+    els['register-form'].classList.add('hidden');
+    document.querySelector('.tabs').classList.add('hidden');
+    els['reset-panel'].classList.remove('hidden');
+    els['reset-request-form'].classList.remove('hidden');
+    els['reset-confirm-form'].classList.add('hidden');
+    if (email) byId('reset-email').value = email;
   }
 
   async function handleSession(session, force = false) {
     state.session = session;
     if (!session) {
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
-      state.tasks = []; state.signatures = []; state.appliedSignatures = []; showAuth(); return;
+      state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null;
+      if (state.chatChannel) { client.removeChannel(state.chatChannel); state.chatChannel = null; }
+      if (state.notificationChannel) { client.removeChannel(state.notificationChannel); state.notificationChannel = null; }
+      if (state.chatInboxChannel) { client.removeChannel(state.chatInboxChannel); state.chatInboxChannel = null; }
+      showAuth(); return;
     }
     const userId = session.user.id;
     if (!force && state.loadedUserId === userId && state.profile) { showApp(); return; }
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
     state.sessionLoadPromise = (async () => {
       await loadProfile(); showApp(); configureAppForProfile();
-      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures()]);
-      renderAll(); state.loadedUserId = userId;
+      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations()]);
+      renderAll(); subscribeToNotifications(); subscribeToChatInbox(); state.loadedUserId = userId;
     })();
     try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
   }
@@ -269,6 +290,53 @@
     state.appliedSignatures = (data || []).filter(item => item.documents);
   }
 
+
+  async function loadNotifications() {
+    if (!isActive()) { state.notifications = []; return; }
+    const { data, error } = await client.from('notifications')
+      .select('*')
+      .eq('user_id', state.session.user.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    state.notifications = data || [];
+  }
+
+  async function loadConversations() {
+    if (!isActive()) { state.conversations = []; return; }
+    const { data, error } = await client.rpc('list_conversations');
+    if (error) throw error;
+    state.conversations = data || [];
+  }
+
+  function subscribeToNotifications() {
+    if (!state.session || state.notificationChannel) return;
+    state.notificationChannel = client.channel(`notifications:${state.session.user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'notifications',
+        filter: `user_id=eq.${state.session.user.id}`
+      }, async () => {
+        await loadNotifications();
+        renderNotifications();
+        updateUnreadBadges();
+        toast('Tienes una nueva notificación.');
+      })
+      .subscribe();
+  }
+
+
+  function subscribeToChatInbox() {
+    if (!state.session || state.chatInboxChannel) return;
+    state.chatInboxChannel = client.channel(`chat-inbox:${state.session.user.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, async payload => {
+        if (payload.new?.sender_id === state.session.user.id) return;
+        await loadConversations();
+        renderConversations();
+        if (payload.new?.conversation_id !== state.activeConversationId) toast('Tienes un mensaje nuevo.');
+      })
+      .subscribe();
+  }
+
   function configureAppForProfile(forceProfileForm = false) {
     const p = state.profile;
     els['sidebar-user'].innerHTML = `<strong>${escapeHtml(p.full_name || p.email)}</strong><br>${escapeHtml(roleLabels[p.role] || p.role)}`;
@@ -276,7 +344,7 @@
     els['user-status-pill'] = byId('user-status-pill');
     els['pending-banner'].classList.toggle('hidden', p.status === 'active');
     els['admin-nav'].classList.toggle('hidden', !isAdmin());
-    qsa('[data-section="new-document"], [data-section="tasks"]').forEach(btn => btn.disabled = !isActive());
+    qsa('[data-section="new-document"], [data-section="tasks"], [data-section="messages"], [data-section="notifications"]').forEach(btn => btn.disabled = !isActive());
     fillProfileForm(forceProfileForm);
   }
 
@@ -288,6 +356,9 @@
     renderSignatures();
     renderAppliedSignatures();
     renderOnboarding();
+    renderNotifications();
+    renderConversations();
+    updateUnreadBadges();
     if (isAdmin()) renderAdminUsers();
   }
 
@@ -312,7 +383,7 @@
       const actionText = actionable.participant_role === 'approver' ? 'aprobar o rechazar' : 'revisar y firmar';
       next = { title:`Tienes una tarea: ${actionable.documents.title}`, text:`Es tu turno de ${actionText}.`, label:'Abrir tarea', document:actionable.document_id };
     } else if (draft) {
-      next = { title:`Continúa el borrador: ${draft.title}`, text:'Coloca los campos de firma y después inicia el proceso.', label:'Continuar configuración', document:draft.id, prepare:true };
+      next = { title:`Continúa el borrador: ${draft.title}`, text:'Indica dónde debe firmar cada persona y después inicia el proceso.', label:'Continuar configuración', document:draft.id, prepare:true };
     } else if (isAdmin() || isContracts() || state.profile.role === 'user') {
       next = { title:'Todo está al día', text:'Puedes crear un documento con el asistente paso a paso.', label:'Crear documento', action:'new-document', neutral:true };
     } else {
@@ -362,8 +433,140 @@
       const label = task.participant_role === 'approver' ? 'Aprobación' : 'Firma';
       const icon = task.participant_role === 'approver' ? '✓' : '✍';
       const buttonLabel = task.is_actionable ? (task.participant_role === 'approver' ? 'Revisar para aprobar' : 'Revisar para firmar') : 'Ver proceso';
-      return `<article class="task-card ${task.is_actionable?'actionable':''}"><div class="task-badge">${icon}</div><div><h3>${escapeHtml(task.documents.title)}</h3><div class="task-meta"><span class="pill">${label}</span>${pill(task.documents.status)}<span class="small muted">Turno ${task.sequence}</span></div>${task.waiting_reason?`<p class="task-wait">${escapeHtml(task.waiting_reason)}</p>`:''}</div><button class="${task.is_actionable?'primary':'secondary'}" data-open-document="${task.document_id}">${buttonLabel}</button></article>`;
+      const orderText = task.is_actionable ? 'Es tu turno ahora' : (task.waiting_reason || 'Esperando a la persona anterior');
+      return `<article class="task-card ${task.is_actionable?'actionable':''}"><div class="task-badge">${icon}</div><div><h3>${escapeHtml(task.documents.title)}</h3><div class="task-meta"><span class="pill">${label}</span>${pill(task.documents.status)}</div><p class="task-wait">${escapeHtml(orderText)}</p></div><button class="${task.is_actionable?'primary':'secondary'}" data-open-document="${task.document_id}">${buttonLabel}</button></article>`;
     }).join('') : '<div class="panel empty">No tienes tareas pendientes. El sistema te avisará cuando llegue tu turno.</div>';
+  }
+
+  function updateUnreadBadges() {
+    const notificationCount = state.notifications.filter(item => !item.read_at).length;
+    const messageCount = state.conversations.reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
+    els['notification-unread-badge'].textContent = String(notificationCount);
+    els['notification-unread-badge'].classList.toggle('hidden', notificationCount === 0);
+    els['message-unread-badge'].textContent = String(messageCount);
+    els['message-unread-badge'].classList.toggle('hidden', messageCount === 0);
+  }
+
+  function notificationIcon(kind) {
+    if (kind === 'document_approval') return '✓';
+    if (kind === 'document_signature') return '✍';
+    if (kind === 'document_rejected') return '!';
+    if (kind === 'document_completed') return '✓';
+    return '🔔';
+  }
+
+  function renderNotifications() {
+    const list = state.notifications;
+    els['notifications-list'].innerHTML = list.length ? list.map(item => `
+      <article class="notification-card ${item.read_at ? '' : 'unread'}">
+        <div class="notification-icon">${notificationIcon(item.kind)}</div>
+        <div>
+          <h3>${escapeHtml(item.title)}</h3>
+          <p>${escapeHtml(item.body)}</p>
+          <time>${fmtDate(item.created_at)}</time>
+        </div>
+        ${item.document_id ? `<button class="secondary" data-open-notification="${item.id}" data-notification-document="${item.document_id}">Abrir documento</button>` : `<button class="secondary" data-read-notification="${item.id}">${item.read_at ? 'Leída' : 'Marcar leída'}</button>`}
+      </article>
+    `).join('') : '<div class="panel empty">No tienes notificaciones.</div>';
+    updateUnreadBadges();
+  }
+
+  function conversationTitle(item) {
+    return item.title || (item.conversation_type === 'direct' ? 'Conversación directa' : 'Grupo sin nombre');
+  }
+
+  function renderConversations() {
+    const list = state.conversations;
+    els['conversation-list'].innerHTML = list.length ? list.map(item => `
+      <button class="conversation-item ${state.activeConversationId === item.id ? 'active' : ''}" data-open-conversation="${item.id}" type="button">
+        <span class="conversation-avatar">${escapeHtml(conversationTitle(item).slice(0,1).toUpperCase())}</span>
+        <span class="conversation-copy"><strong>${escapeHtml(conversationTitle(item))}</strong><span>${escapeHtml(item.latest_message || 'Sin mensajes')}</span></span>
+        ${Number(item.unread_count || 0) ? `<span class="unread-dot">${Number(item.unread_count)}</span>` : ''}
+      </button>
+    `).join('') : '<div class="empty">Aún no tienes conversaciones.</div>';
+    updateUnreadBadges();
+  }
+
+  function renderConversationMembersPicker() {
+    const active = state.profiles.filter(profile => profile.status === 'active' && profile.id !== state.session.user.id);
+    els['conversation-members'].innerHTML = active.length ? active.map(profile => `
+      <label class="member-option">
+        <input type="checkbox" value="${profile.id}" />
+        <span><strong>${escapeHtml(profile.full_name || profile.email)}</strong><br><small class="muted">${escapeHtml(roleLabels[profile.role] || profile.role)} · ${escapeHtml(profile.department || 'Sin departamento')}</small></span>
+      </label>
+    `).join('') : '<p class="muted">No hay otros usuarios activos.</p>';
+  }
+
+  async function openConversation(id) {
+    state.activeConversationId = id;
+    if (state.chatChannel) { await client.removeChannel(state.chatChannel); state.chatChannel = null; }
+    await run(async () => {
+      const [membersRes, messagesRes] = await Promise.all([
+        client.rpc('get_conversation_members', { p_conversation_id: id }),
+        client.rpc('get_conversation_messages', { p_conversation_id: id, p_limit: 300 })
+      ]);
+      if (membersRes.error) throw membersRes.error;
+      if (messagesRes.error) throw messagesRes.error;
+      state.activeConversationMembers = membersRes.data || [];
+      const conversation = state.conversations.find(item => item.id === id);
+      const isMember = state.activeConversationMembers.some(member => member.id === state.session.user.id);
+      els['chat-header'].innerHTML = `<div><h3>${escapeHtml(conversationTitle(conversation || {}))}</h3><p class="muted small">${escapeHtml(state.activeConversationMembers.map(member => member.full_name || member.email).join(', '))}${isAdmin() && !isMember ? ' · Auditoría administrativa de solo lectura' : ''}</p></div>`;
+      els['chat-form'].classList.toggle('hidden', !isMember);
+      renderChatMessages(messagesRes.data || []);
+      if (isMember) await client.rpc('mark_conversation_read', { p_conversation_id: id });
+      await loadConversations();
+      renderConversations();
+    });
+    state.chatChannel = client.channel(`conversation:${id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `conversation_id=eq.${id}` }, async () => {
+        const { data, error } = await client.rpc('get_conversation_messages', { p_conversation_id: id, p_limit: 300 });
+        if (!error) {
+          renderChatMessages(data || []);
+          if (state.activeConversationMembers.some(member => member.id === state.session.user.id)) await client.rpc('mark_conversation_read', { p_conversation_id: id });
+          await loadConversations(); renderConversations();
+        }
+      })
+      .subscribe();
+  }
+
+  function renderChatMessages(messages) {
+    els['chat-messages'].innerHTML = messages.length ? messages.map(message => `
+      <div class="message-row ${message.sender_id === state.session.user.id ? 'mine' : ''}">
+        <div class="message-bubble">
+          <strong>${escapeHtml(message.sender_name)}</strong>
+          <p>${escapeHtml(message.body)}</p>
+          <time>${fmtDate(message.created_at)}</time>
+        </div>
+      </div>
+    `).join('') : '<div class="empty">Todavía no hay mensajes.</div>';
+    els['chat-messages'].scrollTop = els['chat-messages'].scrollHeight;
+  }
+
+  async function createConversation(event) {
+    event.preventDefault();
+    const memberIds = qsa('#conversation-members input:checked').map(input => input.value);
+    if (!memberIds.length) throw new Error('Selecciona por lo menos a una persona.');
+    const title = byId('conversation-title').value.trim();
+    if (memberIds.length > 1 && !title) throw new Error('Escribe un nombre para el grupo.');
+    await run(async () => {
+      const { data, error } = await client.rpc('create_conversation', { p_title: title, p_member_ids: memberIds, p_document_id: null });
+      if (error) throw error;
+      els['conversation-dialog'].close();
+      els['conversation-form'].reset();
+      await loadConversations(); renderConversations();
+      await openConversation(data);
+    }, 'Conversación creada.');
+  }
+
+  async function sendChatMessage(event) {
+    event.preventDefault();
+    const body = els['chat-input'].value.trim();
+    if (!body || !state.activeConversationId) return;
+    await run(async () => {
+      const { error } = await client.rpc('send_chat_message', { p_conversation_id: state.activeConversationId, p_body: body });
+      if (error) throw error;
+      els['chat-input'].value = '';
+    });
   }
 
   function profileDraftKey() { return state.session?.user?.id ? `lumen-sign:profile-draft:${state.session.user.id}` : ''; }
@@ -423,20 +626,23 @@
   }
 
   function navigate(section) {
-    if (!isActive() && ['new-document','tasks','documents','dashboard'].includes(section)) section = 'profile';
+    if (!isActive() && ['new-document','tasks','documents','dashboard','messages','notifications'].includes(section)) section = 'profile';
     qsa('.page-section').forEach(s => s.classList.add('hidden'));
     byId(`section-${section}`).classList.remove('hidden');
     qsa('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.section === section));
     const titles = {
       dashboard: ['Inicio', 'Lo que requiere tu atención'], documents: ['Documentos', 'Consulta el estado de cada expediente'],
       'new-document': ['Crear documento', 'Asistente paso a paso'], tasks: ['Mis tareas', 'Solo se habilita la acción de tu turno'],
-      profile: ['Perfil y firma', 'Identidad y firma registrada'], admin: ['Usuarios', 'Activa cuentas y asigna funciones']
+      messages: ['Mensajes', 'Conversaciones directas y grupos de trabajo'], notifications: ['Notificaciones', 'Avisos de tareas y documentos'],
+      profile: ['Perfil y firma', 'Identidad y firma registrada'], admin: ['Usuarios', 'Activa cuentas, asigna funciones y audita conversaciones']
     };
     els['page-title'].textContent = titles[section][0];
     els['page-subtitle'].textContent = titles[section][1];
     document.querySelector('.sidebar').classList.remove('open');
     if (section === 'profile') setTimeout(prepareCanvas, 50);
     if (section === 'new-document') setWizardStep(state.wizardStep || 1);
+    if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
+    if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
   }
 
   function allowedRolesForParticipant(role) {
@@ -566,7 +772,7 @@
       if(attachment){const path=`${docId}/attachments/${Date.now()}-${safeFilename(attachment.name)}`,attachmentHash=await sha256(attachment);const up=await client.storage.from('documents').upload(path,attachment,{contentType:attachment.type||'application/octet-stream'});if(up.error)throw up.error;const rec=await client.rpc('add_document_attachment',{p_document_id:docId,p_file_path:path,p_file_name:attachment.name,p_file_hash:attachmentHash,p_mime_type:attachment.type||'application/octet-stream',p_size_bytes:attachment.size});if(rec.error)throw rec.error;}
       const flow=await client.rpc('set_document_participants',{p_document_id:docId,p_items:participants});if(flow.error)throw flow.error;
       resetDocumentWizard(); await refreshData(); navigate('documents');
-    },'Borrador creado. Ahora coloca los campos de firma.');
+    },'Borrador creado. Ahora indica dónde debe firmar cada persona.');
     if(newDocId)await openPrepareDocument(newDocId);
   }
 
@@ -623,31 +829,31 @@
     const currentRank=rank[doc.status]??0;
     const track=processSteps.map((step,index)=>`<div class="process-step ${index<currentRank?'done':index===currentRank?'current':'blocked'}">${index+1}. ${step.label}</div>`).join('');
     let guidance='';
-    if(doc.status==='draft')guidance=hasFields?'Los campos están listos. Puedes iniciar el proceso.':'El siguiente paso es colocar los campos de firma sobre el PDF.';
-    else if(doc.status==='awaiting_approval')guidance=myApproval?'Es tu turno de revisar y decidir.':'El documento está esperando la aprobación que corresponde por orden.';
-    else if(doc.status==='awaiting_signature')guidance=mySignature?'Es tu turno de completar los campos y firmar.':'El documento está esperando la firma que corresponde por orden.';
+    if(doc.status==='draft')guidance=hasFields?'Los espacios de firma están listos. Puedes iniciar el proceso.':'El siguiente paso es indicar dónde debe firmar cada persona.';
+    else if(doc.status==='awaiting_approval')guidance=myApproval?'Es tu turno de revisar y decidir.':'El documento está esperando a la persona que debe aprobar antes.';
+    else if(doc.status==='awaiting_signature')guidance=mySignature?'Es tu turno de revisar y colocar tu firma.':'El documento está esperando a la persona que debe firmar antes.';
     else if(doc.status==='completed')guidance='El proceso terminó. La versión actual contiene las firmas aplicadas.';
     else if(doc.status==='rejected')guidance='El documento fue rechazado. Contratos o un administrador debe corregirlo.';
 
     const primary=[];
-    if(canConfigure&&!hasFields)primary.push(`<button class="primary" data-prepare-document="${doc.id}">Continuar: colocar campos</button>`);
+    if(canConfigure&&!hasFields)primary.push(`<button class="primary" data-prepare-document="${doc.id}">Continuar: indicar dónde firman</button>`);
     if(canConfigure&&hasFields)primary.push(`<button class="primary" data-submit-document="${doc.id}">Iniciar proceso</button>`);
     if(myApproval)primary.push(`<button class="primary" data-approve-document="${doc.id}">Aprobar documento</button><button class="danger" data-reject-document="${doc.id}">Rechazar</button>`);
     if(mySignature)primary.push(`<button class="primary" data-sign-document="${doc.id}">Revisar y firmar</button>`);
     if(doc.status==='completed'&&doc.active_file_path)primary.push(`<button class="primary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar PDF final</button>`);
     const secondary=[
       doc.active_file_path&&doc.status!=='completed'?`<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar actual</button>`:'',
-      canConfigure&&hasFields?`<button class="secondary" data-prepare-document="${doc.id}">Editar campos</button>`:'',
+      canConfigure&&hasFields?`<button class="secondary" data-prepare-document="${doc.id}">Editar espacios de firma</button>`:'',
       canConfigure?`<button class="secondary" data-configure-flow="${doc.id}">Cambiar responsables</button>`:'',
       canReplace?`<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>`:''
     ].join('');
-    const participantList=(items,title,letter)=>`<div class="participant-group"><h3>${title}</h3>${items.length?items.map((item,index)=>`<div class="participant-item"><span>${index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${fmtDate(item.acted_at)}</small></div>${pill(item.action_status)}</div>`).join(''):'<p class="muted">Esta etapa se omitió.</p>'}</div>`;
+    const participantList=(items,title,letter)=>`<div class="participant-group"><h3>${title}</h3>${items.length?items.map((item,index)=>`<div class="participant-item"><span>${index===0?'1':index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${index===0?'Actúa primero':'Actúa después de la persona anterior'}${item.acted_at?` · ${fmtDate(item.acted_at)}`:''}</small></div>${pill(item.action_status)}</div>`).join(''):'<p class="muted">Esta etapa se omitió.</p>'}</div>`;
 
-    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div></div><div class="participant-groups">${participantList(approvers,'Primero: aprobadores','A')}${participantList(signers,'Después: firmantes','F')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
+    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div></div><div class="participant-groups">${participantList(approvers,'Aprobaciones','A')}${participantList(signers,'Firmas','F')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
   }
 
   function eventLabel(action) {
-    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Campos de firma preparados'}[action] || action);
+    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados'}[action] || action);
   }
 
   async function replaceDocumentFile(id) {
@@ -727,138 +933,394 @@
   }
 
 
-  const fieldTypeLabels = { signature:'Firma', initials:'Iniciales', date:'Fecha', name:'Nombre', text:'Texto', checkbox:'Casilla' };
-  function initialsOf(name) { return String(name || '').trim().split(/\s+/).filter(Boolean).slice(0,3).map(x => x[0]?.toUpperCase() || '').join(''); }
-  function defaultFieldSize(type) { return type === 'signature' ? [28,9] : type === 'checkbox' ? [6,6] : type === 'text' ? [28,6] : [20,5]; }
+  const fieldTypeLabels = { signature: 'Firma' };
+
+  function defaultFieldSize() {
+    return [30, 10];
+  }
+
   async function getDocumentBundle(id) {
     const [docRes, partsRes, fieldsRes] = await Promise.all([
-      client.from('documents').select('*').eq('id',id).single(),
-      client.from('document_participants').select('*').eq('document_id',id).order('sequence'),
-      client.from('document_fields').select('*').eq('document_id',id).order('page_number')
+      client.from('documents').select('*').eq('id', id).single(),
+      client.from('document_participants').select('*').eq('document_id', id).order('sequence'),
+      client.from('document_fields').select('*').eq('document_id', id).eq('field_type', 'signature').order('page_number')
     ]);
-    [docRes,partsRes,fieldsRes].forEach(r => { if (r.error) throw r.error; });
-    const { data:url, error:urlError } = await client.storage.from('documents').createSignedUrl(docRes.data.active_file_path,300); if (urlError) throw urlError;
-    const response = await fetch(url.signedUrl); if (!response.ok) throw new Error('No se pudo abrir el PDF.');
-    return { doc:docRes.data, participants:partsRes.data||[], fields:fieldsRes.data||[], bytes:await response.arrayBuffer() };
+    [docRes, partsRes, fieldsRes].forEach(response => { if (response.error) throw response.error; });
+    const { data: url, error: urlError } = await client.storage.from('documents').createSignedUrl(docRes.data.active_file_path, 300);
+    if (urlError) throw urlError;
+    const response = await fetch(url.signedUrl);
+    if (!response.ok) throw new Error('No se pudo abrir el PDF.');
+    return { doc: docRes.data, participants: partsRes.data || [], fields: fieldsRes.data || [], bytes: await response.arrayBuffer() };
   }
-  function signerOptions(participants, selected='') {
-    return participants.filter(p => p.participant_role === 'signer').map(p => `<option value="${p.user_id}" ${p.user_id===selected?'selected':''}>${escapeHtml(profileName(p.user_id))} · secuencia ${p.sequence}</option>`).join('');
+
+  function signerOptions(participants, selected = '') {
+    const signers = participants.filter(participant => participant.participant_role === 'signer').sort((a, b) => Number(a.sequence) - Number(b.sequence));
+    return signers.map((participant, index) => {
+      const order = index === 0 ? 'firma primero' : 'firma después';
+      return `<option value="${participant.user_id}" ${participant.user_id === selected ? 'selected' : ''}>${escapeHtml(profileName(participant.user_id))} · ${order}</option>`;
+    }).join('');
   }
+
   async function renderPdfPage(container, pdf, pageNumber, scale, fields, mode) {
     container.innerHTML = '<div class="visual-loading">Renderizando página…</div>';
-    const page = await pdf.getPage(pageNumber), viewport = page.getViewport({scale});
-    const wrapper = document.createElement('div'); wrapper.className='pdf-page'; wrapper.dataset.page=String(pageNumber);
-    const canvas=document.createElement('canvas'), ctx=canvas.getContext('2d'); canvas.width=Math.ceil(viewport.width); canvas.height=Math.ceil(viewport.height);
-    wrapper.style.width=`${canvas.width}px`; wrapper.style.height=`${canvas.height}px`; wrapper.append(canvas);
-    const badge=document.createElement('span'); badge.className='pdf-page-number'; badge.textContent=`Página ${pageNumber}`; wrapper.append(badge); container.innerHTML=''; container.append(wrapper);
-    await page.render({canvasContext:ctx,viewport}).promise;
-    fields.filter(f => Number(f.page_number)===pageNumber).forEach(f => wrapper.append(createFieldOverlay(f,mode)));
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale });
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pdf-page';
+    wrapper.dataset.page = String(pageNumber);
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    wrapper.style.width = `${canvas.width}px`;
+    wrapper.style.height = `${canvas.height}px`;
+    wrapper.append(canvas);
+    const badge = document.createElement('span');
+    badge.className = 'pdf-page-number';
+    badge.textContent = `Página ${pageNumber}`;
+    wrapper.append(badge);
+    container.innerHTML = '';
+    container.append(wrapper);
+    await page.render({ canvasContext: context, viewport }).promise;
+    fields.filter(field => Number(field.page_number) === pageNumber).forEach(field => wrapper.append(createFieldOverlay(field, mode)));
     return wrapper;
   }
-  function positionOverlay(el, field) {
-    el.style.left=`${field.x_pct}%`; el.style.top=`${field.y_pct}%`; el.style.width=`${field.width_pct}%`; el.style.height=`${field.height_pct}%`;
+
+  function positionOverlay(element, field) {
+    element.style.left = `${field.x_pct}%`;
+    element.style.top = `${field.y_pct}%`;
+    element.style.width = `${field.width_pct}%`;
+    element.style.height = `${field.height_pct}%`;
   }
+
   function createFieldOverlay(field, mode) {
-    const el=document.createElement('div'); el.className='field-overlay'; el.dataset.fieldId=field.id; positionOverlay(el,field);
-    if (field.required) el.insertAdjacentHTML('beforeend','<span class="field-required-mark">*</span>');
-    if (mode==='prepare') {
-      el.innerHTML += `<span class="field-caption">${escapeHtml(fieldTypeLabels[field.field_type])}: ${escapeHtml(profileName(field.assigned_to))}</span><span class="resize-handle"></span>`;
-      el.addEventListener('pointerdown', startFieldPointer); el.addEventListener('click', e => { e.stopPropagation(); selectPreparedField(field.id); });
-      if (state.prepare?.selectedId===field.id) el.classList.add('selected');
-    } else {
-      if (field.assigned_to !== state.session.user.id) { el.classList.add('other-signer'); el.innerHTML += `<span class="field-caption">${escapeHtml(fieldTypeLabels[field.field_type])}</span>`; return el; }
-      renderSigningControl(el,field);
+    const element = document.createElement('div');
+    element.className = 'field-overlay';
+    element.dataset.fieldId = field.id;
+    positionOverlay(element, field);
+    element.insertAdjacentHTML('beforeend', '<span class="field-required-mark">*</span>');
+
+    if (mode === 'prepare') {
+      element.innerHTML += `<span class="field-caption">Firma: ${escapeHtml(profileName(field.assigned_to))}</span><span class="resize-handle"></span>`;
+      element.addEventListener('pointerdown', startFieldPointer);
+      element.addEventListener('click', event => { event.stopPropagation(); selectPreparedField(field.id); });
+      if (state.prepare?.selectedId === field.id) element.classList.add('selected');
+      return element;
     }
-    return el;
-  }
-  function renderSigningControl(el,field) {
-    const values=state.signing.values; const value=values[field.id] ?? '';
-    if (value) el.classList.add('completed');
-    if (field.field_type==='text') {
-      el.innerHTML += `<input type="text" maxlength="4000" placeholder="${escapeHtml(field.placeholder||field.label||'Escribe aquí')}" value="${escapeHtml(value)}">`;
-      el.querySelector('input').addEventListener('input',e=>{values[field.id]=e.target.value; updateSignProgress();});
-    } else if (field.field_type==='checkbox') {
-      el.innerHTML += `<input type="checkbox" ${value==='true'?'checked':''}>`; el.querySelector('input').addEventListener('change',e=>{values[field.id]=e.target.checked?'true':''; updateSignProgress(); renderSigningPages(false);});
-    } else if (field.field_type==='signature') {
-      el.innerHTML += value ? `<div class="field-value"><img src="${state.signing.signatureUrl}" alt="Firma"></div>` : '<button class="sign-field-button" type="button">Aplicar mi firma</button>';
-      const b=el.querySelector('button'); if (b) b.addEventListener('click',()=>{values[field.id]='signature'; renderSigningPages(false); updateSignProgress();});
-    } else {
-      const auto = field.field_type==='initials' ? initialsOf(state.profile.full_name||state.profile.email) : field.field_type==='date' ? new Date().toLocaleDateString('es-MX') : (state.profile.full_name||state.profile.email);
-      if (!value) values[field.id]=auto;
-      el.innerHTML += `<div class="field-value">${escapeHtml(values[field.id])}</div>`; el.classList.add('completed');
+
+    if (field.assigned_to !== state.session.user.id) {
+      element.classList.add('other-signer');
+      element.innerHTML += '<span class="field-caption">Firma de otra persona</span>';
+      return element;
     }
+
+    renderSigningControl(element, field);
+    return element;
   }
+
+  function renderSigningControl(element, field) {
+    const values = state.signing.values;
+    const value = values[field.id] || '';
+    if (value) element.classList.add('completed');
+    element.innerHTML += value
+      ? `<div class="field-value"><img src="${state.signing.signatureUrl}" alt="Firma"></div>`
+      : '<button class="sign-field-button" type="button">Aplicar mi firma</button>';
+    const button = element.querySelector('button');
+    if (button) button.addEventListener('click', () => {
+      values[field.id] = 'signature';
+      renderSigningPages(false);
+      updateSignProgress();
+    });
+  }
+
   async function openPrepareDocument(id) {
-    await run(async()=>{
-      const bundle=await getDocumentBundle(id); const signers=bundle.participants.filter(p=>p.participant_role==='signer'); if(!signers.length) throw new Error('Configura al menos un firmante.');
-      const pdf=await pdfjsLib.getDocument({data:bundle.bytes.slice(0)}).promise;
-      state.prepare={...bundle,pdf,page:1,pageCount:pdf.numPages,zoom:1.15,selectedId:null,fields:bundle.fields.map(f=>({...f,x_pct:Number(f.x_pct),y_pct:Number(f.y_pct),width_pct:Number(f.width_pct),height_pct:Number(f.height_pct)}))};
-      const options=signerOptions(bundle.participants); els['field-assignee'].innerHTML=options; els['selected-field-assignee'].innerHTML=options;
-      els['prepare-page-count'].textContent=String(pdf.numPages); els['prepare-dialog'].showModal(); await renderPreparePage();
+    await run(async () => {
+      const bundle = await getDocumentBundle(id);
+      const signers = bundle.participants.filter(participant => participant.participant_role === 'signer');
+      if (!signers.length) throw new Error('Configura al menos un firmante.');
+      const pdf = await pdfjsLib.getDocument({ data: bundle.bytes.slice(0) }).promise;
+      state.prepare = {
+        ...bundle,
+        pdf,
+        page: 1,
+        pageCount: pdf.numPages,
+        zoom: 1.15,
+        selectedId: null,
+        fields: bundle.fields.map(field => ({
+          ...field,
+          field_type: 'signature',
+          required: true,
+          x_pct: Number(field.x_pct),
+          y_pct: Number(field.y_pct),
+          width_pct: Number(field.width_pct),
+          height_pct: Number(field.height_pct)
+        }))
+      };
+      const options = signerOptions(bundle.participants);
+      els['field-assignee'].innerHTML = options;
+      els['selected-field-assignee'].innerHTML = options;
+      els['prepare-page-count'].textContent = String(pdf.numPages);
+      els['prepare-dialog'].showModal();
+      await renderPreparePage();
     });
   }
+
   async function renderPreparePage() {
-    const p=state.prepare; if(!p) return; els['prepare-page-number'].textContent=String(p.page); els['prepare-zoom-label'].textContent=`${Math.round(p.zoom*100/1.15)}%`;
-    await renderPdfPage(els['prepare-pages'],p.pdf,p.page,p.zoom,p.fields,'prepare');
+    const prepare = state.prepare;
+    if (!prepare) return;
+    els['prepare-page-number'].textContent = String(prepare.page);
+    els['prepare-zoom-label'].textContent = `${Math.round(prepare.zoom * 100 / 1.15)}%`;
+    await renderPdfPage(els['prepare-pages'], prepare.pdf, prepare.page, prepare.zoom, prepare.fields, 'prepare');
   }
+
   function selectPreparedField(id) {
-    const p=state.prepare, f=p?.fields.find(x=>x.id===id); if(!f) return; p.selectedId=id; els['selected-field-panel'].classList.remove('hidden');
-    els['selected-field-assignee'].value=f.assigned_to; els['selected-field-type'].value=f.field_type; els['selected-field-label'].value=f.label||''; els['selected-field-required'].checked=Boolean(f.required);
-    qsa('.field-overlay',els['prepare-pages']).forEach(x=>x.classList.toggle('selected',x.dataset.fieldId===id));
+    const prepare = state.prepare;
+    const field = prepare?.fields.find(item => item.id === id);
+    if (!field) return;
+    prepare.selectedId = id;
+    els['selected-field-panel'].classList.remove('hidden');
+    els['selected-field-assignee'].value = field.assigned_to;
+    els['selected-field-label'].value = field.label || 'Firma';
+    qsa('.field-overlay', els['prepare-pages']).forEach(element => element.classList.toggle('selected', element.dataset.fieldId === id));
   }
+
   function addPreparedField() {
-    const p=state.prepare, type=els['field-type'].value, assigned=els['field-assignee'].value; if(!p||!assigned) throw new Error('Selecciona un firmante.');
-    const [w,h]=defaultFieldSize(type); const offset=(p.fields.filter(f=>Number(f.page_number)===p.page).length%8)*2;
-    const f={id:crypto.randomUUID(),document_id:p.doc.id,assigned_to:assigned,field_type:type,page_number:p.page,x_pct:8+offset,y_pct:10+offset,width_pct:w,height_pct:h,required:els['field-required'].checked,label:els['field-label'].value.trim(),placeholder:''};
-    p.fields.push(f); p.selectedId=f.id; renderPreparePage().then(()=>selectPreparedField(f.id));
+    const prepare = state.prepare;
+    const assignedTo = els['field-assignee'].value;
+    if (!prepare || !assignedTo) throw new Error('Selecciona al firmante.');
+    const [width, height] = defaultFieldSize();
+    const offset = (prepare.fields.filter(field => Number(field.page_number) === prepare.page).length % 8) * 2;
+    const field = {
+      id: crypto.randomUUID(),
+      document_id: prepare.doc.id,
+      assigned_to: assignedTo,
+      field_type: 'signature',
+      page_number: prepare.page,
+      x_pct: 8 + offset,
+      y_pct: 10 + offset,
+      width_pct: width,
+      height_pct: height,
+      required: true,
+      label: els['field-label'].value.trim() || 'Firma',
+      placeholder: ''
+    };
+    prepare.fields.push(field);
+    prepare.selectedId = field.id;
+    renderPreparePage().then(() => selectPreparedField(field.id));
   }
+
   function startFieldPointer(event) {
-    const p=state.prepare; if(!p) return; const el=event.currentTarget, f=p.fields.find(x=>x.id===el.dataset.fieldId); if(!f) return;
-    event.preventDefault(); event.stopPropagation(); selectPreparedField(f.id); el.setPointerCapture(event.pointerId);
-    const page=el.parentElement, rect=page.getBoundingClientRect(), startX=event.clientX,startY=event.clientY, original={x:f.x_pct,y:f.y_pct,w:f.width_pct,h:f.height_pct}; const resizing=event.target.classList.contains('resize-handle');
-    const move=e=>{const dx=(e.clientX-startX)/rect.width*100,dy=(e.clientY-startY)/rect.height*100;if(resizing){f.width_pct=Math.max(4,Math.min(100-original.x,original.w+dx));f.height_pct=Math.max(3,Math.min(100-original.y,original.h+dy));}else{f.x_pct=Math.max(0,Math.min(100-original.w,original.x+dx));f.y_pct=Math.max(0,Math.min(100-original.h,original.y+dy));}positionOverlay(el,f);};
-    const stop=()=>{el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',stop);el.removeEventListener('pointercancel',stop);}; el.addEventListener('pointermove',move);el.addEventListener('pointerup',stop);el.addEventListener('pointercancel',stop);
+    const prepare = state.prepare;
+    if (!prepare) return;
+    const element = event.currentTarget;
+    const field = prepare.fields.find(item => item.id === element.dataset.fieldId);
+    if (!field) return;
+    event.preventDefault();
+    event.stopPropagation();
+    selectPreparedField(field.id);
+    element.setPointerCapture(event.pointerId);
+    const page = element.parentElement;
+    const rect = page.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const original = { x: field.x_pct, y: field.y_pct, w: field.width_pct, h: field.height_pct };
+    const resizing = event.target.classList.contains('resize-handle');
+    const move = moveEvent => {
+      const dx = (moveEvent.clientX - startX) / rect.width * 100;
+      const dy = (moveEvent.clientY - startY) / rect.height * 100;
+      if (resizing) {
+        field.width_pct = Math.max(8, Math.min(100 - original.x, original.w + dx));
+        field.height_pct = Math.max(5, Math.min(100 - original.y, original.h + dy));
+      } else {
+        field.x_pct = Math.max(0, Math.min(100 - original.w, original.x + dx));
+        field.y_pct = Math.max(0, Math.min(100 - original.h, original.y + dy));
+      }
+      positionOverlay(element, field);
+    };
+    const stop = () => {
+      element.removeEventListener('pointermove', move);
+      element.removeEventListener('pointerup', stop);
+      element.removeEventListener('pointercancel', stop);
+    };
+    element.addEventListener('pointermove', move);
+    element.addEventListener('pointerup', stop);
+    element.addEventListener('pointercancel', stop);
   }
+
   function updateSelectedPreparedField() {
-    const p=state.prepare,f=p?.fields.find(x=>x.id===p.selectedId);if(!f)return;f.assigned_to=els['selected-field-assignee'].value;f.field_type=els['selected-field-type'].value;f.label=els['selected-field-label'].value.trim();f.required=els['selected-field-required'].checked;renderPreparePage().then(()=>selectPreparedField(f.id));
+    const prepare = state.prepare;
+    const field = prepare?.fields.find(item => item.id === prepare.selectedId);
+    if (!field) return;
+    field.assigned_to = els['selected-field-assignee'].value;
+    field.field_type = 'signature';
+    field.label = els['selected-field-label'].value.trim() || 'Firma';
+    field.required = true;
+    renderPreparePage().then(() => selectPreparedField(field.id));
   }
-  function deletePreparedField() { const p=state.prepare;if(!p?.selectedId)return;p.fields=p.fields.filter(f=>f.id!==p.selectedId);p.selectedId=null;els['selected-field-panel'].classList.add('hidden');renderPreparePage(); }
-  async function savePreparedFields(submit=false) {
-    const p=state.prepare;if(!p)return;const signers=p.participants.filter(x=>x.participant_role==='signer');
-    for(const s of signers) if(!p.fields.some(f=>f.assigned_to===s.user_id&&f.field_type==='signature')) throw new Error(`Falta un campo Firma para ${profileName(s.user_id)}.`);
-    await run(async()=>{const payload=p.fields.map(f=>({id:f.id,assigned_to:f.assigned_to,field_type:f.field_type,page_number:Number(f.page_number),x_pct:Number(f.x_pct.toFixed(4)),y_pct:Number(f.y_pct.toFixed(4)),width_pct:Number(f.width_pct.toFixed(4)),height_pct:Number(f.height_pct.toFixed(4)),required:Boolean(f.required),label:f.label||'',placeholder:f.placeholder||''}));
-      const {error}=await client.rpc('save_document_fields',{p_document_id:p.doc.id,p_fields:payload});if(error)throw error;if(submit){const r=await client.rpc('submit_document',{p_document_id:p.doc.id});if(r.error)throw r.error;}els['prepare-dialog'].close();await refreshData();
-    },submit?'Campos guardados y documento enviado.':'Campos guardados.');
+
+  function deletePreparedField() {
+    const prepare = state.prepare;
+    if (!prepare?.selectedId) return;
+    prepare.fields = prepare.fields.filter(field => field.id !== prepare.selectedId);
+    prepare.selectedId = null;
+    els['selected-field-panel'].classList.add('hidden');
+    renderPreparePage();
   }
+
+  async function savePreparedFields(submit = false) {
+    const prepare = state.prepare;
+    if (!prepare) return;
+    const signers = prepare.participants.filter(participant => participant.participant_role === 'signer');
+    for (const signer of signers) {
+      if (!prepare.fields.some(field => field.assigned_to === signer.user_id)) {
+        throw new Error(`Falta indicar dónde firmará ${profileName(signer.user_id)}.`);
+      }
+    }
+    await run(async () => {
+      const payload = prepare.fields.map(field => ({
+        id: field.id,
+        assigned_to: field.assigned_to,
+        field_type: 'signature',
+        page_number: Number(field.page_number),
+        x_pct: Number(field.x_pct.toFixed(4)),
+        y_pct: Number(field.y_pct.toFixed(4)),
+        width_pct: Number(field.width_pct.toFixed(4)),
+        height_pct: Number(field.height_pct.toFixed(4)),
+        required: true,
+        label: field.label || 'Firma',
+        placeholder: ''
+      }));
+      const { error } = await client.rpc('save_document_fields', { p_document_id: prepare.doc.id, p_fields: payload });
+      if (error) throw error;
+      if (submit) {
+        const response = await client.rpc('submit_document', { p_document_id: prepare.doc.id });
+        if (response.error) throw response.error;
+      }
+      els['prepare-dialog'].close();
+      await refreshData();
+    }, submit ? 'Posiciones guardadas y proceso iniciado.' : 'Posiciones de firma guardadas.');
+  }
+
   async function openSigningDocument(id) {
-    const defaultSignature=state.signatures.find(s=>s.is_default&&!s.revoked_at)||state.signatures[0];if(!defaultSignature)throw new Error('Primero registra una firma en Mi perfil y firma.');
-    await run(async()=>{const bundle=await getDocumentBundle(id);const mine=bundle.fields.filter(f=>f.assigned_to===state.session.user.id);if(!mine.length)throw new Error('No tienes campos asignados.');
-      const {data:sigUrl,error:sigErr}=await client.storage.from('signatures').createSignedUrl(defaultSignature.storage_path,300);if(sigErr)throw sigErr;
-      const pdf=await pdfjsLib.getDocument({data:bundle.bytes.slice(0)}).promise;const values={};mine.forEach(f=>{if(f.value_text)values[f.id]=f.value_text;});
-      state.signing={...bundle,pdf,fields:bundle.fields.map(f=>({...f,x_pct:Number(f.x_pct),y_pct:Number(f.y_pct),width_pct:Number(f.width_pct),height_pct:Number(f.height_pct)})),mine,values,signature:defaultSignature,signatureUrl:sigUrl.signedUrl};
-      if(els['document-dialog'].open)els['document-dialog'].close();els['sign-dialog'].showModal();await renderSigningPages(true);updateSignProgress();
+    const defaultSignature = state.signatures.find(signature => signature.is_default && !signature.revoked_at) || state.signatures[0];
+    if (!defaultSignature) throw new Error('Primero registra una firma en Perfil y firma.');
+    await run(async () => {
+      const bundle = await getDocumentBundle(id);
+      const mine = bundle.fields.filter(field => field.assigned_to === state.session.user.id);
+      if (!mine.length) throw new Error('No tienes espacios de firma asignados.');
+      const { data: signatureUrl, error: signatureError } = await client.storage.from('signatures').createSignedUrl(defaultSignature.storage_path, 300);
+      if (signatureError) throw signatureError;
+      const pdf = await pdfjsLib.getDocument({ data: bundle.bytes.slice(0) }).promise;
+      const values = {};
+      mine.forEach(field => { if (field.value_text) values[field.id] = field.value_text; });
+      state.signing = {
+        ...bundle,
+        pdf,
+        fields: bundle.fields.map(field => ({
+          ...field,
+          field_type: 'signature',
+          required: true,
+          x_pct: Number(field.x_pct),
+          y_pct: Number(field.y_pct),
+          width_pct: Number(field.width_pct),
+          height_pct: Number(field.height_pct)
+        })),
+        mine,
+        values,
+        signature: defaultSignature,
+        signatureUrl: signatureUrl.signedUrl
+      };
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      els['sign-dialog'].showModal();
+      await renderSigningPages(true);
+      updateSignProgress();
     });
   }
-  async function renderSigningPages(reset=true) {
-    const s=state.signing;if(!s)return;const scroll=reset?0:els['sign-pages'].scrollTop;els['sign-pages'].innerHTML='<div class="visual-loading">Preparando vista previa…</div>';
-    const frag=document.createDocumentFragment();for(let i=1;i<=s.pdf.numPages;i++){const holder=document.createElement('div');await renderPdfPage(holder,s.pdf,i,1.15,s.fields,'sign');while(holder.firstChild)frag.append(holder.firstChild);}els['sign-pages'].innerHTML='';els['sign-pages'].append(frag);if(!reset)els['sign-pages'].scrollTop=scroll;
+
+  async function renderSigningPages(reset = true) {
+    const signing = state.signing;
+    if (!signing) return;
+    const scroll = reset ? 0 : els['sign-pages'].scrollTop;
+    els['sign-pages'].innerHTML = '<div class="visual-loading">Preparando vista previa…</div>';
+    const fragment = document.createDocumentFragment();
+    for (let page = 1; page <= signing.pdf.numPages; page += 1) {
+      const holder = document.createElement('div');
+      await renderPdfPage(holder, signing.pdf, page, 1.15, signing.fields, 'sign');
+      while (holder.firstChild) fragment.append(holder.firstChild);
+    }
+    els['sign-pages'].innerHTML = '';
+    els['sign-pages'].append(fragment);
+    if (!reset) els['sign-pages'].scrollTop = scroll;
   }
-  function updateSignProgress() { const s=state.signing;if(!s)return;const required=s.mine.filter(f=>f.required),complete=required.filter(f=>String(s.values[f.id]||'').trim()).length;els['sign-progress'].textContent=`${complete} de ${required.length} campos obligatorios completos`; }
-  function nextRequiredField() { const s=state.signing;if(!s)return;const target=s.mine.find(f=>f.required&&!String(s.values[f.id]||'').trim())||s.mine[0];if(!target)return;const el=els['sign-pages'].querySelector(`[data-field-id="${target.id}"]`);el?.scrollIntoView({behavior:'smooth',block:'center'}); }
+
+  function updateSignProgress() {
+    const signing = state.signing;
+    if (!signing) return;
+    const complete = signing.mine.filter(field => String(signing.values[field.id] || '').trim()).length;
+    els['sign-progress'].textContent = `${complete} de ${signing.mine.length} firmas colocadas`;
+  }
+
+  function nextRequiredField() {
+    const signing = state.signing;
+    if (!signing) return;
+    const target = signing.mine.find(field => !String(signing.values[field.id] || '').trim()) || signing.mine[0];
+    if (!target) return;
+    const element = els['sign-pages'].querySelector(`[data-field-id="${target.id}"]`);
+    element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   async function finishVisualSigning() {
-    const s=state.signing;if(!s)return;const missing=s.mine.filter(f=>f.required&&!String(s.values[f.id]||'').trim());if(missing.length)throw new Error(`Faltan ${missing.length} campos obligatorios.`);
-    await run(async()=>{const sigResponse=await fetch(s.signatureUrl);if(!sigResponse.ok)throw new Error('No se pudo cargar tu firma.');const sigBytes=await sigResponse.arrayBuffer();
-      const {PDFDocument,StandardFonts,rgb}=PDFLib,pdfDoc=await PDFDocument.load(s.bytes),font=await pdfDoc.embedFont(StandardFonts.Helvetica),sigImage=await pdfDoc.embedPng(sigBytes),pages=pdfDoc.getPages();
-      for(const f of s.mine){const page=pages[Number(f.page_number)-1];if(!page)continue;const size=page.getSize(),x=size.width*f.x_pct/100,w=size.width*f.width_pct/100,h=size.height*f.height_pct/100,y=size.height-(size.height*f.y_pct/100)-h,value=String(s.values[f.id]||'');
-        if(f.field_type==='signature'){const scaled=sigImage.scaleToFit(Math.max(10,w-6),Math.max(10,h-6));page.drawImage(sigImage,{x:x+(w-scaled.width)/2,y:y+(h-scaled.height)/2,width:scaled.width,height:scaled.height});}
-        else if(f.field_type==='checkbox'){page.drawRectangle({x,y,width:w,height:h,borderColor:rgb(.1,.1,.1),borderWidth:1});if(value==='true'){page.drawLine({start:{x:x+2,y:y+2},end:{x:x+w-2,y:y+h-2},thickness:1.5});page.drawLine({start:{x:x+w-2,y:y+2},end:{x:x+2,y:y+h-2},thickness:1.5});}}
-        else {let fontSize=Math.max(6,Math.min(12,h*.45));page.drawText(value.slice(0,500),{x:x+3,y:y+Math.max(2,(h-fontSize)/2),size:fontSize,font,color:rgb(.05,.12,.2),maxWidth:Math.max(5,w-6)});}
+    const signing = state.signing;
+    if (!signing) return;
+    const missing = signing.mine.filter(field => !String(signing.values[field.id] || '').trim());
+    if (missing.length) throw new Error(`Falta colocar tu firma en ${missing.length} espacio(s).`);
+    await run(async () => {
+      const signatureResponse = await fetch(signing.signatureUrl);
+      if (!signatureResponse.ok) throw new Error('No se pudo cargar tu firma.');
+      const signatureBytes = await signatureResponse.arrayBuffer();
+      const { PDFDocument } = PDFLib;
+      const pdfDocument = await PDFDocument.load(signing.bytes);
+      const signatureImage = await pdfDocument.embedPng(signatureBytes);
+      const pages = pdfDocument.getPages();
+      for (const field of signing.mine) {
+        const page = pages[Number(field.page_number) - 1];
+        if (!page) continue;
+        const size = page.getSize();
+        const x = size.width * field.x_pct / 100;
+        const width = size.width * field.width_pct / 100;
+        const height = size.height * field.height_pct / 100;
+        const y = size.height - (size.height * field.y_pct / 100) - height;
+        const scaled = signatureImage.scaleToFit(Math.max(10, width - 6), Math.max(10, height - 6));
+        page.drawImage(signatureImage, {
+          x: x + (width - scaled.width) / 2,
+          y: y + (height - scaled.height) / 2,
+          width: scaled.width,
+          height: scaled.height
+        });
       }
-      const output=await pdfDoc.save(),blob=new Blob([output],{type:'application/pdf'}),hash=await sha256(output.buffer),nextVersion=Number(s.doc.current_version)+1,path=`${s.doc.id}/signed/v${nextVersion}-${state.session.user.id}-${Date.now()}.pdf`,fileName=`${s.doc.title.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ -]/g,'').trim().replace(/\s+/g,'-')}-firmado-v${nextVersion}.pdf`;
-      const up=await client.storage.from('documents').upload(path,blob,{contentType:'application/pdf',upsert:false});if(up.error)throw up.error;
-      const rec=await client.rpc('record_document_signature_v2',{p_document_id:s.doc.id,p_user_signature_id:s.signature.id,p_file_path:path,p_file_name:fileName,p_file_hash:hash,p_size_bytes:blob.size,p_user_agent:navigator.userAgent.slice(0,500),p_values:s.mine.map(f=>({id:f.id,value:String(s.values[f.id]||'')}))});if(rec.error)throw rec.error;
-      els['sign-dialog'].close();state.signing=null;await refreshData();
-    },'Documento firmado en los campos indicados.');
+      const output = await pdfDocument.save();
+      const blob = new Blob([output], { type: 'application/pdf' });
+      const hash = await sha256(output.buffer);
+      const nextVersion = Number(signing.doc.current_version) + 1;
+      const path = `${signing.doc.id}/signed/v${nextVersion}-${state.session.user.id}-${Date.now()}.pdf`;
+      const fileName = `${signing.doc.title.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ -]/g, '').trim().replace(/\s+/g, '-')}-firmado-v${nextVersion}.pdf`;
+      const upload = await client.storage.from('documents').upload(path, blob, { contentType: 'application/pdf', upsert: false });
+      if (upload.error) throw upload.error;
+      const record = await client.rpc('record_document_signature_v2', {
+        p_document_id: signing.doc.id,
+        p_user_signature_id: signing.signature.id,
+        p_file_path: path,
+        p_file_name: fileName,
+        p_file_hash: hash,
+        p_size_bytes: blob.size,
+        p_user_agent: navigator.userAgent.slice(0, 500),
+        p_values: signing.mine.map(field => ({ id: field.id, value: 'signature' }))
+      });
+      if (record.error) throw record.error;
+      els['sign-dialog'].close();
+      state.signing = null;
+      await refreshData();
+    }, 'Tu firma se colocó correctamente.');
   }
 
   async function signDocument(id) { await openSigningDocument(id); }
@@ -934,7 +1396,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations()]);
     renderAll();
   }
 
@@ -947,6 +1409,47 @@
     button.addEventListener('keydown',event=>{if(event.key===' '||event.key==='Enter')show(event);});
     button.addEventListener('keyup',hide);
     document.addEventListener('pointerup',hide);
+  }
+
+
+  async function sendPasswordResetCode(email) {
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    if (!cleanEmail) throw new Error('Escribe tu correo.');
+    state.passwordResetEmail = cleanEmail;
+    const { error } = await client.auth.resetPasswordForEmail(cleanEmail, {
+      redirectTo: `${location.origin}${location.pathname}`
+    });
+    if (error) throw error;
+    els['reset-request-form'].classList.add('hidden');
+    els['reset-confirm-form'].classList.remove('hidden');
+    toast('Revisa tu correo e introduce el código de recuperación.');
+  }
+
+  async function completePasswordReset(event) {
+    event.preventDefault();
+    const email = state.passwordResetEmail || byId('reset-email').value.trim();
+    const token = byId('reset-code').value.trim();
+    const password = byId('reset-password').value;
+    const confirmation = byId('reset-password-confirm').value;
+    if (!email || !token) throw new Error('Escribe el correo y el código recibido.');
+    if (password.length < 10) throw new Error('La contraseña debe tener al menos 10 caracteres.');
+    if (password !== confirmation) throw new Error('Las contraseñas no coinciden.');
+    state.passwordResetActive = true;
+    try {
+      await run(async () => {
+        const verification = await client.auth.verifyOtp({ email, token, type: 'recovery' });
+        if (verification.error) throw verification.error;
+        const update = await client.auth.updateUser({ password });
+        if (update.error) throw update.error;
+        await client.auth.signOut();
+        state.passwordResetEmail = '';
+        els['reset-request-form'].reset();
+        els['reset-confirm-form'].reset();
+        switchAuthTab('login');
+      }, 'Contraseña actualizada. Inicia sesión con la nueva contraseña.');
+    } finally {
+      state.passwordResetActive = false;
+    }
   }
 
   function bindEvents() {
@@ -972,13 +1475,17 @@
         switchAuthTab('login');
       });
     });
-    els['forgot-password'].addEventListener('click', async () => {
-      const email = byId('login-email').value.trim() || prompt('Escribe tu correo:');
-      if (!email) return;
-      await run(async () => {
-        const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}${location.pathname}` });
-        if (error) throw error;
-      }, 'Se envió el enlace de recuperación.');
+    els['forgot-password'].addEventListener('click', () => {
+      showResetPanel(byId('login-email').value.trim());
+    });
+    els['reset-back-login'].addEventListener('click', () => switchAuthTab('login'));
+    els['reset-request-form'].addEventListener('submit', async event => {
+      event.preventDefault();
+      await run(() => sendPasswordResetCode(byId('reset-email').value));
+    });
+    els['reset-confirm-form'].addEventListener('submit', completePasswordReset);
+    els['reset-resend'].addEventListener('click', async () => {
+      await run(() => sendPasswordResetCode(state.passwordResetEmail || byId('reset-email').value));
     });
     els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); await client.auth.signOut(); });
     els['main-nav'].addEventListener('click', e => { const b = e.target.closest('[data-section]'); if (b && !b.disabled) navigate(b.dataset.section); });
@@ -988,6 +1495,8 @@
     els['new-document-form'].addEventListener('submit', createDocument);
     bindPasswordHold(els['login-password-toggle'],byId('login-password'));
     bindPasswordHold(els['register-password-toggle'],byId('register-password'));
+    bindPasswordHold(els['reset-password-toggle'],byId('reset-password'));
+    bindPasswordHold(els['reset-password-confirm-toggle'],byId('reset-password-confirm'));
     els['wizard-next'].addEventListener('click',()=>{try{validateWizardStep(state.wizardStep);setWizardStep(state.wizardStep+1);}catch(error){toast(error.message,true);}});
     els['wizard-back'].addEventListener('click',()=>setWizardStep(state.wizardStep-1));
     qsa('input[name="workflow-mode"]').forEach(input=>input.addEventListener('change',()=>setWorkflowMode(input.value)));
@@ -1009,15 +1518,35 @@
     els['prepare-next-page'].addEventListener('click', () => { if(state.prepare && state.prepare.page<state.prepare.pageCount){state.prepare.page++;renderPreparePage();} });
     els['prepare-zoom-in'].addEventListener('click', () => { if(state.prepare){state.prepare.zoom=Math.min(2,state.prepare.zoom+.15);renderPreparePage();} });
     els['prepare-zoom-out'].addEventListener('click', () => { if(state.prepare){state.prepare.zoom=Math.max(.6,state.prepare.zoom-.15);renderPreparePage();} });
-    ['selected-field-assignee','selected-field-type','selected-field-label','selected-field-required'].forEach(id => byId(id).addEventListener(id==='selected-field-label'?'input':'change', updateSelectedPreparedField));
+    ['selected-field-assignee','selected-field-label'].forEach(id => byId(id).addEventListener(id==='selected-field-label'?'input':'change', updateSelectedPreparedField));
     els['delete-field'].addEventListener('click', deletePreparedField);
     els['finish-signing'].addEventListener('click', finishVisualSigning);
     els['next-required-field'].addEventListener('click', nextRequiredField);
     els['clear-signature'].addEventListener('click', clearCanvas);
     els['save-signature'].addEventListener('click', saveSignature);
+    els['new-conversation'].addEventListener('click', () => { renderConversationMembersPicker(); els['conversation-dialog'].showModal(); });
+    els['conversation-form'].addEventListener('submit', createConversation);
+    els['chat-form'].addEventListener('submit', sendChatMessage);
+    els['mark-all-notifications'].addEventListener('click', async () => {
+      await run(async () => {
+        const { error } = await client.rpc('mark_all_notifications_read');
+        if (error) throw error;
+        await loadNotifications(); renderNotifications();
+      }, 'Notificaciones marcadas como leídas.');
+    });
     els['refresh-users'].addEventListener('click', async () => { await run(async () => { await loadProfiles(); renderAdminUsers(); }, 'Lista actualizada.'); });
 
     document.addEventListener('click', async e => {
+      const conversation = e.target.closest('[data-open-conversation]'); if (conversation) return openConversation(conversation.dataset.openConversation);
+      const openNotification = e.target.closest('[data-open-notification]'); if (openNotification) {
+        await client.rpc('mark_notification_read', { p_notification_id: Number(openNotification.dataset.openNotification) });
+        await loadNotifications(); renderNotifications();
+        return openDocument(openNotification.dataset.notificationDocument);
+      }
+      const readNotification = e.target.closest('[data-read-notification]'); if (readNotification) {
+        await client.rpc('mark_notification_read', { p_notification_id: Number(readNotification.dataset.readNotification) });
+        await loadNotifications(); return renderNotifications();
+      }
       const go = e.target.closest('[data-go-section]'); if (go) return navigate(go.dataset.goSection);
       const open = e.target.closest('[data-open-document]'); if (open) return openDocument(open.dataset.openDocument);
       const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName);
@@ -1047,11 +1576,11 @@
   }
 
   async function handleRecoveryEvent(event) {
-    if (event !== 'PASSWORD_RECOVERY') return;
-    const password = prompt('Escribe tu nueva contraseña (mínimo 10 caracteres):');
-    if (!password || password.length < 10) return toast('La contraseña no fue modificada.', true);
-    const { error } = await client.auth.updateUser({ password });
-    if (error) toast(error.message, true); else toast('Contraseña actualizada.');
+    if (event !== 'PASSWORD_RECOVERY') return false;
+    await client.auth.signOut();
+    showResetPanel();
+    toast('Usa el código recibido por correo para crear una contraseña nueva.');
+    return true;
   }
 
   async function init() {
@@ -1060,7 +1589,12 @@
     resetDocumentWizard();
     client.auth.onAuthStateChange((event, session) => {
       setTimeout(async () => {
-        try { await handleRecoveryEvent(event); if(event==='TOKEN_REFRESHED'||event==='USER_UPDATED'){state.session=session;return;} await handleSession(session); }
+        try {
+          if (await handleRecoveryEvent(event)) return;
+          if (state.passwordResetActive && event === 'SIGNED_IN') { state.session = session; return; }
+          if(event==='TOKEN_REFRESHED'||event==='USER_UPDATED'){state.session=session;return;}
+          await handleSession(session);
+        }
         catch (error) { console.error(error); toast(error.message || 'Error de sesión.', true); }
       }, 0);
     });
