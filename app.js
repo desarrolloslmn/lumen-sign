@@ -33,7 +33,9 @@
     prepare: null, signing: null,
     workflowCandidates: [], wizardStep: 1,
     notifications: [], conversations: [], activeConversationId: null, activeConversationMembers: [],
-    chatChannel: null, chatInboxChannel: null, notificationChannel: null, passwordResetEmail: '', passwordResetActive: false
+    chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
+    liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
+    passwordResetEmail: '', passwordResetActive: false
   };
 
   const els = {};
@@ -58,7 +60,7 @@
   function cacheElements() {
     [
       'auth-view','app-view','login-form','register-form','forgot-password','logout-button','admin-nav',
-      'reset-panel','reset-request-form','reset-confirm-form','reset-email','reset-code','reset-password','reset-password-confirm','reset-back-login','reset-resend','reset-password-toggle','reset-password-confirm-toggle',
+      'reset-panel','reset-request-form','reset-confirm-form','reset-email','reset-sent-note','reset-panel-description','reset-password','reset-password-confirm','reset-back-login','reset-password-toggle','reset-password-confirm-toggle',
       'login-password-toggle','register-password-toggle','sidebar-user','user-status-pill','pending-banner',
       'next-action-card','stats-grid','recent-documents','documents-table','document-search','document-status-filter',
       'new-document-form','wizard-steps','wizard-back','wizard-next','wizard-create','wizard-message','wizard-review',
@@ -67,7 +69,8 @@
       'admin-users-table','refresh-users','document-dialog','document-detail','flow-dialog','flow-approval-stage',
       'flow-approvers-builder','flow-signers-builder','flow-add-approver','flow-add-signer','save-flow',
       'menu-button','main-nav','page-title','page-subtitle','toast',
-      'message-unread-badge','notification-unread-badge','new-conversation','conversation-list','chat-header','chat-messages','chat-form','chat-input','conversation-dialog','conversation-form','conversation-title','conversation-members','notifications-list','mark-all-notifications',
+      'task-pending-badge','message-unread-badge','notification-unread-badge','sidebar-reminder','sidebar-reminder-title','sidebar-reminder-text','sidebar-reminder-action','live-status',
+      'new-conversation','conversation-list','chat-header','chat-messages','chat-form','chat-input','conversation-dialog','conversation-form','conversation-title','conversation-members','notifications-list','mark-all-notifications',
       'prepare-dialog','prepare-save','prepare-save-submit','field-assignee','field-type','field-label','field-required','add-field',
       'selected-field-panel','selected-field-assignee','selected-field-type','selected-field-label','selected-field-required','delete-field',
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
@@ -165,15 +168,28 @@
     document.querySelector('.tabs').classList.remove('hidden');
   }
 
-  function showResetPanel(email = '') {
+  function showResetPanel(email = '', mode = 'request') {
     qsa('[data-auth-tab]').forEach(btn => btn.classList.remove('active'));
     els['login-form'].classList.add('hidden');
     els['register-form'].classList.add('hidden');
     document.querySelector('.tabs').classList.add('hidden');
     els['reset-panel'].classList.remove('hidden');
-    els['reset-request-form'].classList.remove('hidden');
-    els['reset-confirm-form'].classList.add('hidden');
+
+    const isConfirm = mode === 'confirm';
+    els['reset-request-form'].classList.toggle('hidden', isConfirm);
+    els['reset-confirm-form'].classList.toggle('hidden', !isConfirm);
+    els['reset-panel-description'].textContent = isConfirm
+      ? 'El enlace fue validado. Crea una contraseña nueva para recuperar tu cuenta.'
+      : 'Te enviaremos un enlace seguro por correo. Al abrirlo volverás aquí para crear una contraseña nueva.';
+
+    if (els['reset-sent-note']) els['reset-sent-note'].classList.add('hidden');
     if (email) byId('reset-email').value = email;
+    if (isConfirm) setTimeout(() => byId('reset-password')?.focus(), 50);
+  }
+
+  function recoveryLinkDetected() {
+    const value = `${location.search || ''}&${location.hash || ''}`;
+    return /(?:^|[?&#])type=recovery(?:&|$)/i.test(value);
   }
 
   async function handleSession(session, force = false) {
@@ -181,9 +197,7 @@
     if (!session) {
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
       state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null;
-      if (state.chatChannel) { client.removeChannel(state.chatChannel); state.chatChannel = null; }
-      if (state.notificationChannel) { client.removeChannel(state.notificationChannel); state.notificationChannel = null; }
-      if (state.chatInboxChannel) { client.removeChannel(state.chatInboxChannel); state.chatInboxChannel = null; }
+      stopLiveSync();
       showAuth(); return;
     }
     const userId = session.user.id;
@@ -192,7 +206,7 @@
     state.sessionLoadPromise = (async () => {
       await loadProfile(); showApp(); configureAppForProfile();
       await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations()]);
-      renderAll(); subscribeToNotifications(); subscribeToChatInbox(); state.loadedUserId = userId;
+      renderAll(); startLiveSync(); state.loadedUserId = userId;
     })();
     try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
   }
@@ -309,33 +323,156 @@
     state.conversations = data || [];
   }
 
+  function setLiveStatus(status = 'connected') {
+    if (!els['live-status']) return;
+    els['live-status'].classList.toggle('disconnected', status === 'disconnected');
+    els['live-status'].classList.toggle('syncing', status === 'syncing');
+    const label = status === 'disconnected' ? 'Reconectando actualizaciones…'
+      : status === 'syncing' ? 'Actualizando…'
+      : 'Actualizaciones en vivo';
+    const text = els['live-status'].querySelector('span:last-child');
+    if (text) text.textContent = label;
+  }
+
+  function queueLiveRefresh(reason = 'realtime') {
+    clearTimeout(state.liveRefreshTimer);
+    state.liveRefreshTimer = setTimeout(() => {
+      syncLiveData(reason).catch(error => {
+        console.error('No se pudo sincronizar en vivo:', error);
+        setLiveStatus('disconnected');
+      });
+    }, 250);
+  }
+
+  async function syncLiveData(reason = 'poll') {
+    if (!state.session || !state.profile || !isActive()) return;
+    setLiveStatus('syncing');
+
+    const previousActionable = new Set(
+      state.tasks.filter(task => task.is_actionable).map(task => task.document_id)
+    );
+    const previousUnreadMessages = state.conversations.reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
+    const previousUnreadNotifications = state.notifications.filter(item => !item.read_at).length;
+
+    await Promise.all([
+      loadDocuments(),
+      loadTasks(),
+      loadNotifications(),
+      loadConversations()
+    ]);
+
+    renderDashboard();
+    renderDocuments();
+    renderTasks();
+    renderNotifications();
+    renderConversations();
+    updateUnreadBadges();
+
+    const newActionable = state.tasks.find(task => task.is_actionable && !previousActionable.has(task.document_id));
+    const unreadMessages = state.conversations.reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
+    const unreadNotifications = state.notifications.filter(item => !item.read_at).length;
+
+    if (reason !== 'initial') {
+      if (newActionable) {
+        const action = newActionable.participant_role === 'approver' ? 'aprobar' : 'firmar';
+        toast(`Nueva tarea: ${newActionable.documents.title}. Es tu turno de ${action}.`);
+      } else if (unreadMessages > previousUnreadMessages) {
+        toast('Tienes un mensaje nuevo.');
+      } else if (unreadNotifications > previousUnreadNotifications) {
+        toast('Tienes una nueva notificación.');
+      }
+    }
+
+    setLiveStatus('connected');
+  }
+
   function subscribeToNotifications() {
     if (!state.session || state.notificationChannel) return;
     state.notificationChannel = client.channel(`notifications:${state.session.user.id}`)
       .on('postgres_changes', {
-        event: 'INSERT', schema: 'public', table: 'notifications',
+        event: '*', schema: 'public', table: 'notifications',
         filter: `user_id=eq.${state.session.user.id}`
-      }, async () => {
-        await loadNotifications();
-        renderNotifications();
-        updateUnreadBadges();
-        toast('Tienes una nueva notificación.');
-      })
-      .subscribe();
+      }, () => queueLiveRefresh('notification'))
+      .subscribe(status => {
+        if (status === 'SUBSCRIBED') setLiveStatus('connected');
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setLiveStatus('disconnected');
+      });
   }
-
 
   function subscribeToChatInbox() {
     if (!state.session || state.chatInboxChannel) return;
     state.chatInboxChannel = client.channel(`chat-inbox:${state.session.user.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, async payload => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, payload => {
         if (payload.new?.sender_id === state.session.user.id) return;
-        await loadConversations();
-        renderConversations();
-        if (payload.new?.conversation_id !== state.activeConversationId) toast('Tienes un mensaje nuevo.');
+        queueLiveRefresh('message');
       })
-      .subscribe();
+      .subscribe(status => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setLiveStatus('disconnected');
+      });
   }
+
+  function subscribeToWorkflow() {
+    if (!state.session || state.workflowChannel) return;
+    state.workflowChannel = client.channel(`workflow:${state.session.user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'document_participants' }, () => queueLiveRefresh('workflow'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'documents' }, () => queueLiveRefresh('workflow'))
+      .subscribe(status => {
+        if (status === 'SUBSCRIBED') setLiveStatus('connected');
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setLiveStatus('disconnected');
+      });
+  }
+
+  function subscribeToMemberships() {
+    if (!state.session || state.membershipChannel) return;
+    state.membershipChannel = client.channel(`memberships:${state.session.user.id}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'conversation_members',
+        filter: `user_id=eq.${state.session.user.id}`
+      }, () => queueLiveRefresh('message'))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations' }, () => queueLiveRefresh('message'))
+      .subscribe(status => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setLiveStatus('disconnected');
+      });
+  }
+
+  function showPendingReminder() {
+    if (!state.session || !isActive() || document.hidden) return;
+    const task = state.tasks.find(item => item.is_actionable);
+    if (!task) return;
+    const action = task.participant_role === 'approver' ? 'aprobar o rechazar' : 'firmar';
+    toast(`Recordatorio: “${task.documents.title}” sigue pendiente de ${action}.`);
+  }
+
+  function startLiveSync() {
+    subscribeToNotifications();
+    subscribeToChatInbox();
+    subscribeToWorkflow();
+    subscribeToMemberships();
+
+    clearInterval(state.liveSyncTimer);
+    state.liveSyncTimer = setInterval(() => queueLiveRefresh('poll'), 30000);
+
+    clearInterval(state.reminderTimer);
+    state.reminderTimer = setInterval(showPendingReminder, 5 * 60 * 1000);
+
+    setLiveStatus('connected');
+  }
+
+  function stopLiveSync() {
+    clearTimeout(state.liveRefreshTimer);
+    clearInterval(state.liveSyncTimer);
+    clearInterval(state.reminderTimer);
+    state.liveRefreshTimer = null;
+    state.liveSyncTimer = null;
+    state.reminderTimer = null;
+
+    ['chatChannel','notificationChannel','chatInboxChannel','workflowChannel','membershipChannel'].forEach(key => {
+      if (state[key]) client.removeChannel(state[key]);
+      state[key] = null;
+    });
+    setLiveStatus('disconnected');
+  }
+
 
   function configureAppForProfile(forceProfileForm = false) {
     const p = state.profile;
@@ -439,12 +576,52 @@
   }
 
   function updateUnreadBadges() {
+    const taskCount = state.tasks.filter(item => item.is_actionable).length;
     const notificationCount = state.notifications.filter(item => !item.read_at).length;
     const messageCount = state.conversations.reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
-    els['notification-unread-badge'].textContent = String(notificationCount);
-    els['notification-unread-badge'].classList.toggle('hidden', notificationCount === 0);
-    els['message-unread-badge'].textContent = String(messageCount);
-    els['message-unread-badge'].classList.toggle('hidden', messageCount === 0);
+
+    const badgeValues = [
+      [els['task-pending-badge'], taskCount],
+      [els['notification-unread-badge'], notificationCount],
+      [els['message-unread-badge'], messageCount]
+    ];
+    badgeValues.forEach(([badge, count]) => {
+      if (!badge) return;
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.classList.toggle('hidden', count === 0);
+      badge.closest('.nav-item')?.classList.toggle('has-attention', count > 0);
+    });
+
+    const totalAttention = taskCount + notificationCount + messageCount;
+    document.title = totalAttention ? `(${totalAttention}) Lumen Sign` : 'Lumen Sign';
+
+    const reminder = els['sidebar-reminder'];
+    if (!reminder) return;
+    if (!totalAttention) {
+      reminder.classList.add('hidden');
+      return;
+    }
+
+    reminder.classList.remove('hidden');
+    if (taskCount) {
+      const first = state.tasks.find(item => item.is_actionable);
+      els['sidebar-reminder-title'].textContent = `${taskCount} ${taskCount === 1 ? 'tarea requiere' : 'tareas requieren'} tu atención`;
+      els['sidebar-reminder-text'].textContent = first
+        ? `${first.participant_role === 'approver' ? 'Debes revisar' : 'Debes firmar'}: ${first.documents.title}`
+        : 'Abre tu bandeja de tareas para continuar.';
+      els['sidebar-reminder-action'].textContent = 'Abrir mis tareas';
+      els['sidebar-reminder-action'].dataset.goSection = 'tasks';
+    } else if (messageCount) {
+      els['sidebar-reminder-title'].textContent = `${messageCount} ${messageCount === 1 ? 'mensaje nuevo' : 'mensajes nuevos'}`;
+      els['sidebar-reminder-text'].textContent = 'Tienes conversaciones pendientes de leer.';
+      els['sidebar-reminder-action'].textContent = 'Abrir mensajes';
+      els['sidebar-reminder-action'].dataset.goSection = 'messages';
+    } else {
+      els['sidebar-reminder-title'].textContent = `${notificationCount} ${notificationCount === 1 ? 'notificación nueva' : 'notificaciones nuevas'}`;
+      els['sidebar-reminder-text'].textContent = 'Revisa los avisos recientes del sistema.';
+      els['sidebar-reminder-action'].textContent = 'Abrir notificaciones';
+      els['sidebar-reminder-action'].dataset.goSection = 'notifications';
+    }
   }
 
   function notificationIcon(kind) {
@@ -1412,39 +1589,55 @@
   }
 
 
-  async function sendPasswordResetCode(email) {
+  async function sendPasswordResetLink(email) {
     const cleanEmail = String(email || '').trim().toLowerCase();
     if (!cleanEmail) throw new Error('Escribe tu correo.');
+
     state.passwordResetEmail = cleanEmail;
+
     const { error } = await client.auth.resetPasswordForEmail(cleanEmail, {
       redirectTo: `${location.origin}${location.pathname}`
     });
+
     if (error) throw error;
-    els['reset-request-form'].classList.add('hidden');
-    els['reset-confirm-form'].classList.remove('hidden');
-    toast('Revisa tu correo e introduce el código de recuperación.');
+
+    if (els['reset-sent-note']) els['reset-sent-note'].classList.remove('hidden');
+    toast('Enlace enviado. Revisa tu correo y abre el botón para cambiar la contraseña.');
   }
 
   async function completePasswordReset(event) {
     event.preventDefault();
-    const email = state.passwordResetEmail || byId('reset-email').value.trim();
-    const token = byId('reset-code').value.trim();
+
     const password = byId('reset-password').value;
     const confirmation = byId('reset-password-confirm').value;
-    if (!email || !token) throw new Error('Escribe el correo y el código recibido.');
-    if (password.length < 10) throw new Error('La contraseña debe tener al menos 10 caracteres.');
-    if (password !== confirmation) throw new Error('Las contraseñas no coinciden.');
+
+    if (password.length < 10) {
+      throw new Error('La contraseña debe tener al menos 10 caracteres.');
+    }
+
+    if (password !== confirmation) {
+      throw new Error('Las contraseñas no coinciden.');
+    }
+
+    const { data: sessionData } = await client.auth.getSession();
+    if (!sessionData.session) {
+      throw new Error('El enlace de recuperación venció o no es válido. Solicita uno nuevo.');
+    }
+
     state.passwordResetActive = true;
+
     try {
       await run(async () => {
-        const verification = await client.auth.verifyOtp({ email, token, type: 'recovery' });
-        if (verification.error) throw verification.error;
-        const update = await client.auth.updateUser({ password });
-        if (update.error) throw update.error;
-        await client.auth.signOut();
+        const { error } = await client.auth.updateUser({ password });
+        if (error) throw error;
+
+        byId('reset-confirm-form').reset();
         state.passwordResetEmail = '';
-        els['reset-request-form'].reset();
-        els['reset-confirm-form'].reset();
+        state.passwordResetActive = false;
+
+        await client.auth.signOut();
+
+        history.replaceState({}, document.title, `${location.origin}${location.pathname}`);
         switchAuthTab('login');
       }, 'Contraseña actualizada. Inicia sesión con la nueva contraseña.');
     } finally {
@@ -1481,12 +1674,9 @@
     els['reset-back-login'].addEventListener('click', () => switchAuthTab('login'));
     els['reset-request-form'].addEventListener('submit', async event => {
       event.preventDefault();
-      await run(() => sendPasswordResetCode(byId('reset-email').value));
+      await run(() => sendPasswordResetLink(byId('reset-email').value));
     });
     els['reset-confirm-form'].addEventListener('submit', completePasswordReset);
-    els['reset-resend'].addEventListener('click', async () => {
-      await run(() => sendPasswordResetCode(state.passwordResetEmail || byId('reset-email').value));
-    });
     els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); await client.auth.signOut(); });
     els['main-nav'].addEventListener('click', e => { const b = e.target.closest('[data-section]'); if (b && !b.disabled) navigate(b.dataset.section); });
     els['menu-button'].addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
@@ -1572,14 +1762,21 @@
     });
     ['pointerup','pointercancel','pointerleave'].forEach(type => canvas.addEventListener(type, () => { state.signatureDrawing = false; }));
     window.addEventListener('resize', () => { if (!byId('section-profile').classList.contains('hidden')) prepareCanvas(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && state.session) queueLiveRefresh('visibility'); });
+    window.addEventListener('online', () => { setLiveStatus('syncing'); queueLiveRefresh('online'); });
+    window.addEventListener('offline', () => setLiveStatus('disconnected'));
     window.addEventListener('beforeunload', e => { if(state.profileDirty){e.preventDefault();e.returnValue='';} });
   }
 
-  async function handleRecoveryEvent(event) {
-    if (event !== 'PASSWORD_RECOVERY') return false;
-    await client.auth.signOut();
-    showResetPanel();
-    toast('Usa el código recibido por correo para crear una contraseña nueva.');
+  async function handleRecoveryEvent(event, session) {
+    const isRecovery = event === 'PASSWORD_RECOVERY' || (state.passwordResetActive && event === 'SIGNED_IN');
+    if (!isRecovery) return false;
+
+    state.passwordResetActive = true;
+    state.session = session;
+    showAuth();
+    showResetPanel('', 'confirm');
+    toast('Enlace validado. Crea tu contraseña nueva.');
     return true;
   }
 
@@ -1587,10 +1784,11 @@
     cacheElements();
     bindEvents();
     resetDocumentWizard();
+    state.passwordResetActive = recoveryLinkDetected();
     client.auth.onAuthStateChange((event, session) => {
       setTimeout(async () => {
         try {
-          if (await handleRecoveryEvent(event)) return;
+          if (await handleRecoveryEvent(event, session)) return;
           if (state.passwordResetActive && event === 'SIGNED_IN') { state.session = session; return; }
           if(event==='TOKEN_REFRESHED'||event==='USER_UPDATED'){state.session=session;return;}
           await handleSession(session);

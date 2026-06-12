@@ -76,19 +76,20 @@
         <div>
           <p class="eyebrow dark">Recuperar acceso</p>
           <h2>Restablecer contraseña</h2>
-          <p class="muted">Te enviaremos un código por correo. El código no iniciará sesión por sí solo.</p>
+          <p id="reset-panel-description" class="muted">Te enviaremos un enlace seguro por correo. Al abrirlo volverás aquí para crear una contraseña nueva.</p>
         </div>
+
         <form id="reset-request-form" class="stack">
           <label>Correo
             <input id="reset-email" type="email" autocomplete="email" required />
           </label>
-          <button class="primary large" type="submit">Enviar código</button>
+          <button class="primary large" type="submit">Enviar enlace de recuperación</button>
+          <p id="reset-sent-note" class="success-note hidden">Enlace enviado. Revisa tu bandeja de entrada y correo no deseado. Abre el enlace desde el mismo navegador o dispositivo donde quieras cambiar la contraseña.</p>
           <button id="reset-back-login" class="link-button" type="button">Volver a iniciar sesión</button>
         </form>
+
         <form id="reset-confirm-form" class="stack hidden">
-          <label>Código recibido
-            <input id="reset-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required placeholder="Código del correo" />
-          </label>
+          <p class="success-note">Enlace validado. Escribe y confirma tu contraseña nueva.</p>
           <label>Nueva contraseña
             <span class="password-control">
               <input id="reset-password" type="password" autocomplete="new-password" minlength="10" required />
@@ -101,8 +102,7 @@
               <button id="reset-password-confirm-toggle" class="password-hold" type="button" aria-label="Mantén presionado para ver la contraseña">👁</button>
             </span>
           </label>
-          <button class="primary large" type="submit">Validar código y cambiar contraseña</button>
-          <button id="reset-resend" class="link-button" type="button">Enviar otro código</button>
+          <button class="primary large" type="submit">Guardar contraseña nueva</button>
         </form>
       </section>
     </section>
@@ -113,7 +113,7 @@
       <div class="sidebar-brand"><span class="brand-mark small-mark">L</span><strong>Lumen Sign</strong></div>
       <nav id="main-nav">
         <button data-section="dashboard" class="nav-item active"><span>⌂</span>Inicio</button>
-        <button data-section="tasks" class="nav-item"><span>✓</span>Mis tareas</button>
+        <button data-section="tasks" class="nav-item"><span>✓</span>Mis tareas <b id="task-pending-badge" class="nav-badge task-badge-nav hidden">0</b></button>
         <button data-section="documents" class="nav-item"><span>▤</span>Documentos</button>
         <button data-section="messages" class="nav-item"><span>✉</span>Mensajes <b id="message-unread-badge" class="nav-badge hidden">0</b></button>
         <button data-section="notifications" class="nav-item"><span>🔔</span>Notificaciones <b id="notification-unread-badge" class="nav-badge hidden">0</b></button>
@@ -121,6 +121,18 @@
         <button data-section="profile" class="nav-item"><span>◯</span>Perfil y firma</button>
         <button data-section="admin" id="admin-nav" class="nav-item hidden"><span>⚙</span>Usuarios</button>
       </nav>
+      <aside id="sidebar-reminder" class="sidebar-reminder hidden" aria-live="polite">
+        <div class="sidebar-reminder-head">
+          <span class="live-dot" aria-hidden="true"></span>
+          <strong id="sidebar-reminder-title">Actualizaciones en vivo</strong>
+        </div>
+        <p id="sidebar-reminder-text">No tienes pendientes.</p>
+        <button id="sidebar-reminder-action" class="sidebar-reminder-button" type="button" data-go-section="tasks">Abrir pendientes</button>
+      </aside>
+      <div id="live-status" class="live-status" title="La aplicación actualiza mensajes, notificaciones y tareas sin recargar">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span>Actualizaciones en vivo</span>
+      </div>
       <div class="sidebar-footer">
         <div id="sidebar-user" class="small"></div>
         <button id="logout-button" class="secondary full" type="button">Cerrar sesión</button>
