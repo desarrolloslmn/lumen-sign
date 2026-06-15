@@ -35,7 +35,8 @@
     notifications: [], conversations: [], activeConversationId: null, activeConversationMembers: [],
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
-    passwordResetEmail: '', passwordResetActive: false
+    passwordResetEmail: '', passwordResetActive: false,
+    emailSystemStatus: null, emailDeliveries: []
   };
 
   const els = {};
@@ -74,7 +75,8 @@
       'prepare-dialog','prepare-save','prepare-save-submit','field-assignee','field-type','field-label','field-required','add-field',
       'selected-field-panel','selected-field-assignee','selected-field-type','selected-field-label','selected-field-required','delete-field',
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
-      'sign-dialog','sign-pages','finish-signing','sign-progress','next-required-field'
+      'sign-dialog','sign-pages','finish-signing','sign-progress','next-required-field',
+      'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
   }
@@ -205,7 +207,7 @@
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
     state.sessionLoadPromise = (async () => {
       await loadProfile(); showApp(); configureAppForProfile();
-      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations()]);
+      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus()]);
       renderAll(); startLiveSync(); state.loadedUserId = userId;
     })();
     try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
@@ -486,6 +488,42 @@
   }
 
 
+  async function loadEmailSystemStatus() {
+    if (!isAdmin()) { state.emailSystemStatus = null; state.emailDeliveries = []; return; }
+    const [statusResponse, deliveriesResponse] = await Promise.all([
+      client.rpc('get_email_system_status'),
+      client.rpc('list_recent_email_deliveries', { p_limit: 40 })
+    ]);
+    if (statusResponse.error) {
+      console.warn('No se pudo cargar el estado del correo.', statusResponse.error);
+      state.emailSystemStatus = null;
+    } else state.emailSystemStatus = statusResponse.data || null;
+    if (deliveriesResponse.error) {
+      console.warn('No se pudo cargar el historial de correo.', deliveriesResponse.error);
+      state.emailDeliveries = [];
+    } else state.emailDeliveries = deliveriesResponse.data || [];
+  }
+
+  function renderEmailSystemStatus() {
+    if (!isAdmin() || !els['email-system-status']) return;
+    const item = state.emailSystemStatus;
+    if (!item) {
+      els['email-system-status'].innerHTML = '<div class="empty">Ejecuta la migración 07 y configura Gmail para ver el estado.</div>';
+      if (els['email-delivery-list']) els['email-delivery-list'].innerHTML = '';
+      return;
+    }
+    const cards = [
+      ['Correos', item.emails_enabled ? 'Activos' : 'Desactivados'],
+      ['Pendientes', Number(item.pending || 0)],
+      ['Fallidos', Number(item.failed || 0)],
+      ['Enviados 24 h', Number(item.sent_24h || 0)]
+    ];
+    els['email-system-status'].innerHTML = cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
+    if (!els['email-delivery-list']) return;
+    const rows = state.emailDeliveries || [];
+    els['email-delivery-list'].innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Destinatario</th><th>Asunto</th><th>Estado</th><th>Intentos</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.recipient_email)}</td><td>${escapeHtml(row.subject)}</td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td>${row.status === 'failed' ? `<button class="secondary" data-retry-email="${row.id}">Reintentar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Todavía no hay correos en la cola.</div>';
+  }
+
   function renderAll() {
     renderDashboard();
     renderDocuments();
@@ -496,7 +534,7 @@
     renderNotifications();
     renderConversations();
     updateUnreadBadges();
-    if (isAdmin()) renderAdminUsers();
+    if (isAdmin()) { renderAdminUsers(); renderEmailSystemStatus(); }
   }
 
   function renderDashboard() {
@@ -820,6 +858,7 @@
     if (section === 'new-document') setWizardStep(state.wizardStep || 1);
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
     if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
+    if (section === 'admin' && isAdmin()) { loadEmailSystemStatus().then(renderEmailSystemStatus).catch(error => toast(error.message, true)); }
   }
 
   function allowedRolesForParticipant(role) {
@@ -903,6 +942,10 @@
       validateFile(byId('doc-file').files[0],['application/pdf'],true);
       const attachment=byId('doc-attachment').files[0]; if(attachment) validateFile(attachment,[],false);
     }
+    if (step===2) {
+      const dueDays = Number(byId('doc-due-days').value || 0);
+      if (!Number.isFinite(dueDays) || dueDays < 1 || dueDays > 365) throw new Error('Los días para completar deben estar entre 1 y 365.');
+    }
     if (step===3) {
       const participants=readOrderedParticipants(els['approvers-builder'],els['signers-builder'],workflowMode());
       if (workflowMode()==='approval_signature' && !participants.some(item=>item.participant_role==='approver')) throw new Error('Agrega al menos un aprobador.');
@@ -921,7 +964,10 @@
     const approvers=participants.filter(item=>item.participant_role==='approver');
     const signers=participants.filter(item=>item.participant_role==='signer');
     const people = items => items.length ? items.map((item,index)=>`<div class="review-person"><span>${index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${escapeHtml(roleLabels[state.profiles.find(p=>p.id===item.user_id)?.role]||'')}</small></div></div>`).join('') : '<p class="muted">Esta etapa se omitirá.</p>';
-    els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Aprobar y después firmar':'Solo firmas'}</strong></p><p class="muted">El orden queda bloqueado al iniciar.</p></div><div class="review-card"><h4>Aprobadores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
+    const dueDays = Number(byId('doc-due-days').value || 10);
+    const firstReminder = Number(byId('doc-first-reminder-hours').value || 24);
+    const repeatReminder = Number(byId('doc-repeat-reminder-hours').value || 24);
+    els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Aprobar y después firmar':'Solo firmas'}</strong></p><p class="muted">Fecha límite: ${dueDays} días. Primer recordatorio: ${firstReminder} h; después cada ${repeatReminder} h.</p></div><div class="review-card"><h4>Aprobadores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
   }
 
   function resetDocumentWizard() {
@@ -930,6 +976,9 @@
     document.querySelector('input[name="workflow-mode"][value="approval_signature"]').checked=true;
     setWorkflowMode('approval_signature');
     addOrderedParticipant(els['signers-builder'],'signer');
+    byId('doc-due-days').value = '10';
+    byId('doc-first-reminder-hours').value = '24';
+    byId('doc-repeat-reminder-hours').value = '24';
     setWizardStep(1);
   }
 
@@ -948,6 +997,15 @@
       const attached=await client.rpc('attach_primary_file',{p_document_id:docId,p_file_path:filePath,p_file_name:file.name,p_file_hash:hash,p_mime_type:file.type||'application/pdf',p_size_bytes:file.size});if(attached.error)throw attached.error;
       if(attachment){const path=`${docId}/attachments/${Date.now()}-${safeFilename(attachment.name)}`,attachmentHash=await sha256(attachment);const up=await client.storage.from('documents').upload(path,attachment,{contentType:attachment.type||'application/octet-stream'});if(up.error)throw up.error;const rec=await client.rpc('add_document_attachment',{p_document_id:docId,p_file_path:path,p_file_name:attachment.name,p_file_hash:attachmentHash,p_mime_type:attachment.type||'application/octet-stream',p_size_bytes:attachment.size});if(rec.error)throw rec.error;}
       const flow=await client.rpc('set_document_participants',{p_document_id:docId,p_items:participants});if(flow.error)throw flow.error;
+      const dueDays = Number(byId('doc-due-days').value || 10);
+      const dueAt = new Date(Date.now() + dueDays * 86400000).toISOString();
+      const delivery = await client.rpc('configure_document_delivery', {
+        p_document_id: docId,
+        p_due_at: dueAt,
+        p_first_reminder_hours: Number(byId('doc-first-reminder-hours').value || 24),
+        p_repeat_reminder_hours: Number(byId('doc-repeat-reminder-hours').value || 24)
+      });
+      if (delivery.error) throw delivery.error;
       resetDocumentWizard(); await refreshData(); navigate('documents');
     },'Borrador creado. Ahora indica dónde debe firmar cada persona.');
     if(newDocId)await openPrepareDocument(newDocId);
@@ -1022,15 +1080,28 @@
       doc.active_file_path&&doc.status!=='completed'?`<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar actual</button>`:'',
       canConfigure&&hasFields?`<button class="secondary" data-prepare-document="${doc.id}">Editar espacios de firma</button>`:'',
       canConfigure?`<button class="secondary" data-configure-flow="${doc.id}">Cambiar responsables</button>`:'',
-      canReplace?`<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>`:''
+      canReplace?`<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>`:'',
+      `<button class="secondary" data-document-chat="${doc.id}">Conversación del expediente</button>`
     ].join('');
     const participantList=(items,title,letter)=>`<div class="participant-group"><h3>${title}</h3>${items.length?items.map((item,index)=>`<div class="participant-item"><span>${index===0?'1':index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${index===0?'Actúa primero':'Actúa después de la persona anterior'}${item.acted_at?` · ${fmtDate(item.acted_at)}`:''}</small></div>${pill(item.action_status)}</div>`).join(''):'<p class="muted">Esta etapa se omitió.</p>'}</div>`;
 
-    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div></div><div class="participant-groups">${participantList(approvers,'Aprobaciones','A')}${participantList(signers,'Firmas','F')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
+    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div><div class="detail-tile"><strong>Fecha límite</strong><p>${fmtDate(doc.due_at)}</p></div></div><div class="participant-groups">${participantList(approvers,'Aprobaciones','A')}${participantList(signers,'Firmas','F')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
   }
 
   function eventLabel(action) {
-    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados'}[action] || action);
+    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados'}[action] || action);
+  }
+
+  async function openDocumentConversation(documentId) {
+    await run(async () => {
+      const { data: conversationId, error } = await client.rpc('ensure_document_conversation', { p_document_id: documentId });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await loadConversations();
+      renderConversations();
+      navigate('messages');
+      await openConversation(conversationId);
+    });
   }
 
   async function replaceDocumentFile(id) {
@@ -1573,7 +1644,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus()]);
     renderAll();
   }
 
@@ -1725,6 +1796,7 @@
       }, 'Notificaciones marcadas como leídas.');
     });
     els['refresh-users'].addEventListener('click', async () => { await run(async () => { await loadProfiles(); renderAdminUsers(); }, 'Lista actualizada.'); });
+    if (els['refresh-email-status']) els['refresh-email-status'].addEventListener('click', async () => { await run(async () => { await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Estado de correo actualizado.'); });
 
     document.addEventListener('click', async e => {
       const conversation = e.target.closest('[data-open-conversation]'); if (conversation) return openConversation(conversation.dataset.openConversation);
@@ -1739,6 +1811,8 @@
       }
       const go = e.target.closest('[data-go-section]'); if (go) return navigate(go.dataset.goSection);
       const open = e.target.closest('[data-open-document]'); if (open) return openDocument(open.dataset.openDocument);
+      const documentChat = e.target.closest('[data-document-chat]'); if (documentChat) return openDocumentConversation(documentChat.dataset.documentChat);
+      const retryEmail = e.target.closest('[data-retry-email]'); if (retryEmail) { await run(async () => { const { error } = await client.rpc('admin_retry_email', { p_outbox_id: Number(retryEmail.dataset.retryEmail) }); if (error) throw error; await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Correo colocado nuevamente en la cola.'); return; }
       const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName);
       const replace = e.target.closest('[data-replace-document]'); if (replace) return replaceDocumentFile(replace.dataset.replaceDocument);
       const flow = e.target.closest('[data-configure-flow]'); if (flow) return configureFlow(flow.dataset.configureFlow);
