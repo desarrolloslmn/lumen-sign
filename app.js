@@ -81,7 +81,7 @@
       'tasks-table','profile-onboarding','profile-form','signature-canvas','clear-signature','save-signature','signature-list','signed-history-table',
       'admin-users-table','refresh-users','document-dialog','document-detail','flow-dialog','flow-approval-stage',
       'flow-approvers-builder','flow-signers-builder','flow-add-approver','flow-add-signer','save-flow',
-      'menu-button','main-nav','page-title','page-subtitle','toast',
+      'menu-button','menu-overlay','main-nav','page-title','page-subtitle','toast',
       'task-pending-badge','message-unread-badge','notification-unread-badge','sidebar-reminder','sidebar-reminder-title','sidebar-reminder-text','sidebar-reminder-action','live-status',
       'new-conversation','conversation-list','chat-header','chat-messages','chat-form','chat-input','conversation-dialog','conversation-form','conversation-title','conversation-members','notifications-list','mark-all-notifications',
       'prepare-dialog','prepare-save','prepare-save-submit','field-assignee','field-type','field-label','field-required',
@@ -172,6 +172,28 @@
   function showApp() {
     els['auth-view'].classList.add('hidden');
     els['app-view'].classList.remove('hidden');
+  }
+
+  function openMobileMenu() {
+    const sidebar = document.querySelector('.sidebar');
+    if (!sidebar || window.matchMedia('(min-width: 901px)').matches) return;
+    sidebar.classList.add('open');
+    document.body.classList.add('menu-open');
+    els['menu-overlay']?.classList.remove('hidden');
+    els['menu-button']?.setAttribute('aria-expanded', 'true');
+  }
+
+  function closeMobileMenu() {
+    document.querySelector('.sidebar')?.classList.remove('open');
+    document.body.classList.remove('menu-open');
+    els['menu-overlay']?.classList.add('hidden');
+    els['menu-button']?.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleMobileMenu() {
+    const sidebar = document.querySelector('.sidebar');
+    if (sidebar?.classList.contains('open')) closeMobileMenu();
+    else openMobileMenu();
   }
 
   function switchAuthTab(tab) {
@@ -865,7 +887,7 @@
     };
     els['page-title'].textContent = titles[section][0];
     els['page-subtitle'].textContent = titles[section][1];
-    document.querySelector('.sidebar').classList.remove('open');
+    closeMobileMenu();
     if (section === 'profile') setTimeout(prepareCanvas, 50);
     if (section === 'new-document') setWizardStep(state.wizardStep || 1);
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
@@ -1785,7 +1807,11 @@
     els['reset-confirm-form'].addEventListener('submit', completePasswordReset);
     els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); await client.auth.signOut(); });
     els['main-nav'].addEventListener('click', e => { const b = e.target.closest('[data-section]'); if (b && !b.disabled) navigate(b.dataset.section); });
-    els['menu-button'].addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
+    els['menu-button'].setAttribute('aria-expanded', 'false');
+    els['menu-button'].addEventListener('click', toggleMobileMenu);
+    els['menu-overlay']?.addEventListener('click', closeMobileMenu);
+    window.addEventListener('keydown', event => { if (event.key === 'Escape') closeMobileMenu(); });
+    window.addEventListener('resize', () => { if (window.matchMedia('(min-width: 901px)').matches) closeMobileMenu(); });
     els['document-search'].addEventListener('input', renderDocuments);
     els['document-status-filter'].addEventListener('change', renderDocuments);
     els['new-document-form'].addEventListener('submit', createDocument);

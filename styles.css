@@ -83,3 +83,137 @@ button.primary,button.secondary,button.danger{border-radius:10px;padding:.78rem 
 
 /* V5.1: colocación de firma con clic directo sobre el PDF */
 .placement-instruction{display:grid;grid-template-columns:42px 1fr;gap:.75rem;align-items:center;padding:.85rem;border:1px dashed #8bb4de;border-radius:12px;background:#eef6ff;color:#17365f}.placement-instruction p{margin:.2rem 0 0;color:#52677d;font-size:.8rem;line-height:1.4}.placement-cursor{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:#17365f;color:#fff;font-size:1.35rem;font-weight:900}.signature-placement-page{cursor:crosshair}.signature-placement-page canvas{pointer-events:none}.signature-placement-page .field-overlay{cursor:move}.signature-placement-page .field-overlay .resize-handle{cursor:nwse-resize}
+
+/* --------------------------------------------------------------------------
+   Lumen Sign v5.2 — responsive integral y navegación móvil
+   -------------------------------------------------------------------------- */
+html{overflow-x:hidden;text-size-adjust:100%;-webkit-text-size-adjust:100%}
+body{min-width:0;overflow-x:hidden}
+img,svg,canvas,video{max-width:100%}
+button,input,select,textarea{max-width:100%}
+.app-layout,.content,.page-section,.panel,.wizard-shell,.subpanel,.task-card,.notification-card,.chat-shell,.chat-panel,.conversation-copy,.document-hero,.visual-layout,.pdf-workspace{min-width:0}
+.app-layout{width:100%;grid-template-columns:clamp(238px,17vw,278px) minmax(0,1fr)}
+.sidebar{width:100%;min-width:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin}
+.sidebar #main-nav{flex:0 0 auto}
+.nav-item{width:100%;min-width:0}
+.nav-item span:first-child{flex:0 0 24px}.nav-item .nav-badge{flex:0 0 auto}
+.sidebar-footer{position:relative}
+.content{width:100%;max-width:1640px;margin-inline:auto;padding-inline:clamp(1rem,2.6vw,3rem)}
+.topbar{min-width:0}.topbar>div{min-width:0}.topbar h1{font-size:clamp(1.75rem,2.6vw,2.8rem);line-height:1.08}.topbar .pill{flex:0 0 auto}
+.panel,.wizard-shell,.subpanel{width:100%}
+.panel-header>*{min-width:0}
+.table-wrap{width:100%;max-width:100%;overscroll-behavior-inline:contain;-webkit-overflow-scrolling:touch}
+table{min-width:720px}
+#admin-users-table table,#email-delivery-list table{min-width:900px}
+.toolbar{flex-wrap:wrap}.toolbar>*{flex:1 1 210px}.toolbar button{flex:0 0 auto}
+.button-row{flex-wrap:wrap}.button-row>*{max-width:100%}
+.stats-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.stat{min-width:0}.stat strong{font-size:clamp(1.55rem,2.2vw,2rem)}
+.task-card{grid-template-columns:auto minmax(0,1fr) auto}
+.task-card>div{min-width:0}
+.notification-card{grid-template-columns:44px minmax(0,1fr) auto}
+.notification-card>div{min-width:0}
+.form-grid,.file-grid,.workflow-options,.stage-grid,.participant-groups,.review-grid,.detail-grid{min-width:0}
+.form-grid>* ,.file-grid>* ,.workflow-options>* ,.stage-grid>* ,.participant-groups>* ,.review-grid>* ,.detail-grid>*{min-width:0}
+.ordered-row{min-width:0}.ordered-row label{min-width:0}
+.chat-shell{width:100%;max-width:100%}
+.message-bubble{overflow-wrap:anywhere}
+.visual-dialog{width:min(1480px,calc(100vw - 2rem));max-width:calc(100vw - 2rem)}
+.visual-layout{min-height:0}.pdf-workspace{overflow:hidden}.pdf-pages{max-width:100%;overflow:auto;overscroll-behavior:contain}
+.pdf-page{max-width:100%}.pdf-page canvas{display:block;max-width:none}
+.dialog{max-width:calc(100vw - 1.5rem)}
+.dialog::backdrop{background:rgba(5,17,31,.58);backdrop-filter:blur(2px)}
+.menu-overlay{display:none}
+
+@media (max-width:1180px){
+  .app-layout{grid-template-columns:230px minmax(0,1fr)}
+  .sidebar{padding:1rem;gap:1rem}
+  .nav-item{padding:.72rem .7rem;font-size:.92rem}
+  .stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .two-column{grid-template-columns:1fr}
+  .content{padding-inline:1.2rem}
+}
+
+@media (max-width:900px){
+  body.menu-open{overflow:hidden;touch-action:none}
+  .app-layout{display:block;min-height:100dvh}
+  .sidebar{position:fixed;inset:0 auto 0 0;z-index:1200;width:min(326px,86vw);height:100vh;height:100dvh;transform:translateX(-105%);transition:transform .22s ease;box-shadow:18px 0 50px rgba(4,18,35,.28);padding:1rem;left:0}
+  .sidebar.open{transform:translateX(0)}
+  .menu-overlay{display:block;position:fixed;inset:0;z-index:1190;border:0;background:rgba(4,17,31,.5);backdrop-filter:blur(2px);padding:0}
+  .menu-overlay.hidden{display:none!important}
+  .content{max-width:none;padding:0 1rem 3rem}
+  .topbar{position:sticky;top:0;z-index:50;margin:0 -1rem 1rem;padding:.85rem 1rem;background:rgba(244,247,251,.94);backdrop-filter:blur(12px);border-bottom:1px solid rgba(220,228,236,.9)}
+  .topbar h1{font-size:clamp(1.45rem,6vw,2rem)}
+  .topbar p{font-size:.82rem}
+  .icon-button{display:grid;place-items:center;flex:0 0 auto;width:44px;height:44px;padding:0;font-size:1.25rem}
+  .section-intro,.admin-guide,.messages-head{align-items:stretch;flex-direction:column}
+  .panel-header{align-items:flex-start;flex-wrap:wrap}
+  .panel-header>.toolbar,.panel-header>.button-row{width:100%}
+  .form-grid.three,.email-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .chat-shell{height:auto;min-height:0;grid-template-columns:1fr}
+  .conversation-list{max-height:250px;border-right:0;border-bottom:1px solid var(--line)}
+  .chat-panel{min-height:520px}
+  .visual-dialog{width:100vw;max-width:100vw;height:100vh;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0;padding:.75rem}
+  .visual-header{padding-right:2.8rem}
+  .visual-layout{height:calc(100dvh - 150px);grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+  .field-panel{max-height:34dvh;overflow:auto}
+  .pdf-workspace{min-height:0}
+  .sign-pages{max-height:calc(100dvh - 185px)}
+}
+
+@media (max-width:700px){
+  :root{--radius:14px}
+  .content{padding-inline:.7rem}
+  .topbar{margin-inline:-.7rem;padding-inline:.7rem}
+  .topbar .pill{font-size:.68rem;padding:.28rem .55rem}
+  .panel,.subpanel{padding:1rem}
+  .stats-grid,.review-grid,.detail-grid,.form-grid.three,.email-status-grid{grid-template-columns:1fr}
+  .next-action{display:flex;flex-direction:column;align-items:stretch;padding:1rem}
+  .next-action button{width:100%}
+  .task-card{grid-template-columns:42px minmax(0,1fr)}
+  .task-card>button{grid-column:1/-1;width:100%}
+  .notification-card{grid-template-columns:40px minmax(0,1fr)}
+  .notification-card>button{grid-column:1/-1;width:100%}
+  .toolbar,.button-row{width:100%;align-items:stretch;flex-direction:column}
+  .toolbar>* ,.button-row>*{width:100%;flex:1 1 auto}
+  .checkbox-row{align-items:flex-start}
+  .wizard-head,.wizard-panel{padding:1rem}
+  .wizard-steps{grid-template-columns:repeat(4,minmax(0,1fr));gap:.3rem}
+  .wizard-steps li{font-size:0;padding:.5rem .2rem}.wizard-steps li span{font-size:.75rem}
+  .wizard-footer{padding:.8rem;gap:.55rem}.wizard-footer button{flex:1 1 140px}.wizard-footer #wizard-message{width:100%;order:-1}
+  .ordered-row{grid-template-columns:34px minmax(0,1fr)}
+  .order-actions{grid-column:1/-1;justify-content:flex-end;width:100%}
+  .stage-header{align-items:flex-start;flex-direction:column}.stage-header>button{width:100%}
+  .document-hero-top,.process-track,.audit-panel{align-items:stretch;flex-direction:column}
+  .process-track{display:grid;grid-template-columns:1fr}
+  .chat-compose{grid-template-columns:1fr}.chat-compose button{width:100%}
+  .chat-panel{min-height:470px}.message-bubble{max-width:92%}
+  .auth-card{width:calc(100% - 1rem);margin:.5rem;padding:1.15rem;border-radius:18px}
+  .dialog:not(.visual-dialog){width:100vw;max-width:100vw;min-height:100dvh;margin:0;border-radius:0;padding:1rem}
+  .dialog-close{position:sticky;top:.25rem;margin-left:auto;z-index:5}
+  .visual-header .button-row{width:100%}
+  .visual-header .button-row button{width:100%}
+  .pdf-toolbar{position:sticky;top:0;z-index:5;overflow-x:auto;justify-content:flex-start;white-space:nowrap}
+  .field-panel{max-height:38dvh}
+  .signature-card{align-items:stretch;flex-direction:column}.signature-card button{width:100%}
+  #signature-canvas{width:100%;height:220px;touch-action:none}
+  table{min-width:660px}
+}
+
+@media (max-width:420px){
+  .sidebar{width:92vw}
+  .sidebar-brand{font-size:1rem}
+  .nav-item{padding:.72rem .65rem}
+  .topbar{gap:.6rem}.topbar p{display:none}
+  .topbar .pill{margin-left:auto}
+  .panel,.wizard-shell,.subpanel{border-radius:12px}
+  .auth-brand-mobile{margin-bottom:1rem}
+  .brand-points{grid-template-columns:1fr}
+  .tabs{margin-bottom:1.2rem}
+  .file-drop{padding:1rem}
+  .toast{left:.6rem;right:.6rem;bottom:.6rem;max-width:none}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
