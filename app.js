@@ -42,6 +42,18 @@
   const els = {};
   const byId = (id) => document.getElementById(id);
   const qsa = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+  function numberInputValue(id, fallback) {
+    const input = byId(id);
+    if (!input) return Number(fallback);
+    const value = Number(input.value);
+    return Number.isFinite(value) ? value : Number(fallback);
+  }
+
+  function setInputValue(id, value) {
+    const input = byId(id);
+    if (input) input.value = String(value);
+  }
   const isAdmin = () => ['superadmin', 'admin'].includes(state.profile?.role);
   const isContracts = () => state.profile?.role === 'contracts';
   const isActive = () => state.profile?.status === 'active';
@@ -943,7 +955,7 @@
       const attachment=byId('doc-attachment').files[0]; if(attachment) validateFile(attachment,[],false);
     }
     if (step===2) {
-      const dueDays = Number(byId('doc-due-days').value || 0);
+      const dueDays = numberInputValue('doc-due-days', 10);
       if (!Number.isFinite(dueDays) || dueDays < 1 || dueDays > 365) throw new Error('Los días para completar deben estar entre 1 y 365.');
     }
     if (step===3) {
@@ -964,9 +976,9 @@
     const approvers=participants.filter(item=>item.participant_role==='approver');
     const signers=participants.filter(item=>item.participant_role==='signer');
     const people = items => items.length ? items.map((item,index)=>`<div class="review-person"><span>${index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${escapeHtml(roleLabels[state.profiles.find(p=>p.id===item.user_id)?.role]||'')}</small></div></div>`).join('') : '<p class="muted">Esta etapa se omitirá.</p>';
-    const dueDays = Number(byId('doc-due-days').value || 10);
-    const firstReminder = Number(byId('doc-first-reminder-hours').value || 24);
-    const repeatReminder = Number(byId('doc-repeat-reminder-hours').value || 24);
+    const dueDays = numberInputValue('doc-due-days', 10);
+    const firstReminder = numberInputValue('doc-first-reminder-hours', 24);
+    const repeatReminder = numberInputValue('doc-repeat-reminder-hours', 24);
     els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Aprobar y después firmar':'Solo firmas'}</strong></p><p class="muted">Fecha límite: ${dueDays} días. Primer recordatorio: ${firstReminder} h; después cada ${repeatReminder} h.</p></div><div class="review-card"><h4>Aprobadores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
   }
 
@@ -976,9 +988,9 @@
     document.querySelector('input[name="workflow-mode"][value="approval_signature"]').checked=true;
     setWorkflowMode('approval_signature');
     addOrderedParticipant(els['signers-builder'],'signer');
-    byId('doc-due-days').value = '10';
-    byId('doc-first-reminder-hours').value = '24';
-    byId('doc-repeat-reminder-hours').value = '24';
+    setInputValue('doc-due-days', 10);
+    setInputValue('doc-first-reminder-hours', 24);
+    setInputValue('doc-repeat-reminder-hours', 24);
     setWizardStep(1);
   }
 
@@ -997,13 +1009,13 @@
       const attached=await client.rpc('attach_primary_file',{p_document_id:docId,p_file_path:filePath,p_file_name:file.name,p_file_hash:hash,p_mime_type:file.type||'application/pdf',p_size_bytes:file.size});if(attached.error)throw attached.error;
       if(attachment){const path=`${docId}/attachments/${Date.now()}-${safeFilename(attachment.name)}`,attachmentHash=await sha256(attachment);const up=await client.storage.from('documents').upload(path,attachment,{contentType:attachment.type||'application/octet-stream'});if(up.error)throw up.error;const rec=await client.rpc('add_document_attachment',{p_document_id:docId,p_file_path:path,p_file_name:attachment.name,p_file_hash:attachmentHash,p_mime_type:attachment.type||'application/octet-stream',p_size_bytes:attachment.size});if(rec.error)throw rec.error;}
       const flow=await client.rpc('set_document_participants',{p_document_id:docId,p_items:participants});if(flow.error)throw flow.error;
-      const dueDays = Number(byId('doc-due-days').value || 10);
+      const dueDays = numberInputValue('doc-due-days', 10);
       const dueAt = new Date(Date.now() + dueDays * 86400000).toISOString();
       const delivery = await client.rpc('configure_document_delivery', {
         p_document_id: docId,
         p_due_at: dueAt,
-        p_first_reminder_hours: Number(byId('doc-first-reminder-hours').value || 24),
-        p_repeat_reminder_hours: Number(byId('doc-repeat-reminder-hours').value || 24)
+        p_first_reminder_hours: numberInputValue('doc-first-reminder-hours', 24),
+        p_repeat_reminder_hours: numberInputValue('doc-repeat-reminder-hours', 24)
       });
       if (delivery.error) throw delivery.error;
       resetDocumentWizard(); await refreshData(); navigate('documents');

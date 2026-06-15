@@ -251,6 +251,28 @@
               </label>
             </div>
             <div class="logic-note"><strong>Regla del sistema:</strong> nunca se puede firmar antes de terminar las aprobaciones cuando eliges el proceso recomendado.</div>
+
+            <div class="delivery-settings">
+              <div>
+                <p class="eyebrow dark">Seguimiento automático</p>
+                <h3>Fecha límite y recordatorios</h3>
+                <p class="muted small">Lumen Sign avisará únicamente a la persona cuyo turno esté activo.</p>
+              </div>
+              <div class="form-grid three">
+                <label>
+                  Días para completar
+                  <input id="doc-due-days" type="number" min="1" max="365" value="10" required />
+                </label>
+                <label>
+                  Primer recordatorio (horas)
+                  <input id="doc-first-reminder-hours" type="number" min="1" max="8760" value="24" required />
+                </label>
+                <label>
+                  Repetir recordatorio cada (horas)
+                  <input id="doc-repeat-reminder-hours" type="number" min="1" max="8760" value="24" required />
+                </label>
+              </div>
+            </div>
           </section>
 
           <section class="wizard-panel hidden" data-wizard-step="3">
@@ -347,6 +369,19 @@
           <div class="panel-header wrap"><div><h2>Usuarios registrados</h2><p class="muted small">Solo el superadministrador puede crear otros administradores.</p></div><button id="refresh-users" class="secondary" type="button">Actualizar</button></div>
           <div id="admin-users-table"></div>
         </div>
+        <div class="panel">
+          <div class="panel-header wrap">
+            <div>
+              <p class="eyebrow dark">Entrega</p>
+              <h2>Correos automáticos</h2>
+              <p class="muted small">Consulta la cola, los envíos recientes y los intentos fallidos.</p>
+            </div>
+            <button id="refresh-email-status" class="secondary" type="button">Actualizar correos</button>
+          </div>
+          <div id="email-system-status" class="email-status-grid"></div>
+          <div id="email-delivery-list"></div>
+        </div>
+
         <div class="panel audit-panel">
           <div><p class="eyebrow dark">Supervisión</p><h2>Auditoría de conversaciones</h2><p class="muted">Los administradores autorizados pueden consultar las conversaciones corporativas para investigar incidentes y dar cumplimiento. Este acceso debe estar informado en el aviso de privacidad.</p></div>
           <button class="secondary" data-go-section="messages" type="button">Abrir conversaciones</button>
