@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
-  <meta name="theme-color" content="#102f55" />
   <title>Lumen Sign</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -395,6 +394,33 @@
   <dialog id="document-dialog" class="dialog document-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
     <div id="document-detail"></div>
+  </dialog>
+
+  <dialog id="preview-dialog" class="dialog visual-dialog preview-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar vista previa">×</button></form>
+    <div class="visual-header preview-header">
+      <div>
+        <p class="eyebrow dark">Vista previa</p>
+        <h2 id="preview-title">Documento</h2>
+        <p class="muted">Revisa todas las páginas antes de aprobar, rechazar o firmar.</p>
+      </div>
+      <div class="button-row">
+        <button id="preview-back-document" class="secondary" type="button">Volver al expediente</button>
+        <button id="preview-download" class="secondary" type="button">Descargar</button>
+      </div>
+    </div>
+    <section class="pdf-workspace preview-workspace">
+      <div class="pdf-toolbar">
+        <button id="preview-prev-page" class="secondary" type="button">← Anterior</button>
+        <span>Página <strong id="preview-page-number">1</strong> de <strong id="preview-page-count">1</strong></span>
+        <button id="preview-next-page" class="secondary" type="button">Siguiente →</button>
+        <span class="toolbar-separator"></span>
+        <button id="preview-zoom-out" class="secondary" type="button">−</button>
+        <span id="preview-zoom-label">100%</span>
+        <button id="preview-zoom-in" class="secondary" type="button">+</button>
+      </div>
+      <div id="preview-pages" class="pdf-pages preview-pages"></div>
+    </section>
   </dialog>
 
   <dialog id="flow-dialog" class="dialog flow-dialog">

@@ -30,7 +30,7 @@
     flowDocumentId: null,
     signatureDrawing: false,
     profileDirty: false, loadedUserId: null, sessionLoadPromise: null,
-    prepare: null, signing: null,
+    prepare: null, signing: null, preview: null,
     workflowCandidates: [], wizardStep: 1,
     notifications: [], conversations: [], activeConversationId: null, activeConversationMembers: [],
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
@@ -88,6 +88,7 @@
       'selected-field-panel','selected-field-assignee','selected-field-type','selected-field-label','selected-field-required','delete-field',
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
       'sign-dialog','sign-pages','finish-signing','sign-progress','next-required-field',
+      'preview-dialog','preview-title','preview-pages','preview-page-number','preview-page-count','preview-prev-page','preview-next-page','preview-zoom-in','preview-zoom-out','preview-zoom-label','preview-back-document','preview-download',
       'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
@@ -1107,10 +1108,11 @@
     const primary=[];
     if(canConfigure&&!hasFields)primary.push(`<button class="primary" data-prepare-document="${doc.id}">Continuar: indicar dónde firman</button>`);
     if(canConfigure&&hasFields)primary.push(`<button class="primary" data-submit-document="${doc.id}">Iniciar proceso</button>`);
-    if(myApproval)primary.push(`<button class="primary" data-approve-document="${doc.id}">Aprobar documento</button><button class="danger" data-reject-document="${doc.id}">Rechazar</button>`);
+    if(myApproval)primary.push(`<button class="primary" data-preview-document="${doc.id}">1. Revisar PDF</button><button class="primary" data-approve-document="${doc.id}">2. Aprobar documento</button><button class="danger" data-reject-document="${doc.id}">Rechazar</button>`);
     if(mySignature)primary.push(`<button class="primary" data-sign-document="${doc.id}">Revisar y firmar</button>`);
     if(doc.status==='completed'&&doc.active_file_path)primary.push(`<button class="primary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar PDF final</button>`);
     const secondary=[
+      doc.active_file_path&&!myApproval&&!mySignature?`<button class="secondary preview-action" data-preview-document="${doc.id}">Vista previa del PDF</button>`:'',
       doc.active_file_path&&doc.status!=='completed'?`<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar actual</button>`:'',
       canConfigure&&hasFields?`<button class="secondary" data-prepare-document="${doc.id}">Editar espacios de firma</button>`:'',
       canConfigure?`<button class="secondary" data-configure-flow="${doc.id}">Cambiar responsables</button>`:'',
@@ -1173,6 +1175,43 @@
       const a = document.createElement('a');
       a.href = data.signedUrl; a.download = name; a.target = '_blank'; a.rel = 'noopener'; a.click();
     });
+  }
+
+  async function openDocumentPreview(id) {
+    await run(async () => {
+      const bundle = await getDocumentBundle(id);
+      const pdf = await pdfjsLib.getDocument({ data: bundle.bytes.slice(0) }).promise;
+      state.preview = { ...bundle, pdf, page: 1, pageCount: pdf.numPages, zoom: 1.15 };
+      els['preview-title'].textContent = bundle.doc.title || 'Documento';
+      els['preview-page-count'].textContent = String(pdf.numPages);
+      if (els['document-dialog']?.open) els['document-dialog'].close();
+      els['preview-dialog'].showModal();
+      await renderPreviewPage();
+    });
+  }
+
+  async function renderPreviewPage() {
+    const preview = state.preview;
+    if (!preview) return;
+    els['preview-page-number'].textContent = String(preview.page);
+    els['preview-page-count'].textContent = String(preview.pageCount);
+    els['preview-zoom-label'].textContent = `${Math.round(preview.zoom * 100 / 1.15)}%`;
+    await renderPdfPage(els['preview-pages'], preview.pdf, preview.page, preview.zoom, [], 'preview');
+    els['preview-prev-page'].disabled = preview.page <= 1;
+    els['preview-next-page'].disabled = preview.page >= preview.pageCount;
+  }
+
+  async function returnFromPreviewToDocument() {
+    const documentId = state.preview?.doc?.id || state.activeDocumentId;
+    if (els['preview-dialog']?.open) els['preview-dialog'].close();
+    state.preview = null;
+    if (documentId) await openDocument(documentId);
+  }
+
+  async function downloadPreviewDocument() {
+    const preview = state.preview;
+    if (!preview?.doc?.active_file_path) return;
+    await downloadPrivate(preview.doc.active_file_path, preview.doc.active_file_name || 'documento.pdf');
   }
 
   async function configureFlow(docId) {
@@ -1841,6 +1880,12 @@
     els['prepare-zoom-out'].addEventListener('click', () => { if(state.prepare){state.prepare.zoom=Math.max(.6,state.prepare.zoom-.15);renderPreparePage();} });
     ['selected-field-assignee','selected-field-label'].forEach(id => byId(id).addEventListener(id==='selected-field-label'?'input':'change', updateSelectedPreparedField));
     els['delete-field'].addEventListener('click', deletePreparedField);
+    els['preview-prev-page'].addEventListener('click', () => { if (state.preview && state.preview.page > 1) { state.preview.page -= 1; renderPreviewPage(); } });
+    els['preview-next-page'].addEventListener('click', () => { if (state.preview && state.preview.page < state.preview.pageCount) { state.preview.page += 1; renderPreviewPage(); } });
+    els['preview-zoom-in'].addEventListener('click', () => { if (state.preview) { state.preview.zoom = Math.min(2.2, state.preview.zoom + 0.15); renderPreviewPage(); } });
+    els['preview-zoom-out'].addEventListener('click', () => { if (state.preview) { state.preview.zoom = Math.max(0.55, state.preview.zoom - 0.15); renderPreviewPage(); } });
+    els['preview-back-document'].addEventListener('click', returnFromPreviewToDocument);
+    els['preview-download'].addEventListener('click', downloadPreviewDocument);
     els['finish-signing'].addEventListener('click', finishVisualSigning);
     els['next-required-field'].addEventListener('click', nextRequiredField);
     els['clear-signature'].addEventListener('click', clearCanvas);
@@ -1873,6 +1918,7 @@
       const open = e.target.closest('[data-open-document]'); if (open) return openDocument(open.dataset.openDocument);
       const documentChat = e.target.closest('[data-document-chat]'); if (documentChat) return openDocumentConversation(documentChat.dataset.documentChat);
       const retryEmail = e.target.closest('[data-retry-email]'); if (retryEmail) { await run(async () => { const { error } = await client.rpc('admin_retry_email', { p_outbox_id: Number(retryEmail.dataset.retryEmail) }); if (error) throw error; await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Correo colocado nuevamente en la cola.'); return; }
+      const preview = e.target.closest('[data-preview-document]'); if (preview) return openDocumentPreview(preview.dataset.previewDocument);
       const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName);
       const replace = e.target.closest('[data-replace-document]'); if (replace) return replaceDocumentFile(replace.dataset.replaceDocument);
       const flow = e.target.closest('[data-configure-flow]'); if (flow) return configureFlow(flow.dataset.configureFlow);
@@ -1895,6 +1941,7 @@
       const p = canvasPoint(e); const ctx = canvas.getContext('2d'); ctx.lineTo(p.x, p.y); ctx.stroke(); canvas.dataset.hasInk = '1';
     });
     ['pointerup','pointercancel','pointerleave'].forEach(type => canvas.addEventListener(type, () => { state.signatureDrawing = false; }));
+    els['preview-dialog'].addEventListener('close', () => { state.preview = null; els['preview-pages'].innerHTML = ''; });
     window.addEventListener('resize', () => { if (!byId('section-profile').classList.contains('hidden')) prepareCanvas(); });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && state.session) queueLiveRefresh('visibility'); });
     window.addEventListener('online', () => { setLiveStatus('syncing'); queueLiveRefresh('online'); });
