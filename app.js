@@ -72,7 +72,7 @@
       'menu-button','main-nav','page-title','page-subtitle','toast',
       'task-pending-badge','message-unread-badge','notification-unread-badge','sidebar-reminder','sidebar-reminder-title','sidebar-reminder-text','sidebar-reminder-action','live-status',
       'new-conversation','conversation-list','chat-header','chat-messages','chat-form','chat-input','conversation-dialog','conversation-form','conversation-title','conversation-members','notifications-list','mark-all-notifications',
-      'prepare-dialog','prepare-save','prepare-save-submit','field-assignee','field-type','field-label','field-required','add-field',
+      'prepare-dialog','prepare-save','prepare-save-submit','field-assignee','field-type','field-label','field-required',
       'selected-field-panel','selected-field-assignee','selected-field-type','selected-field-label','selected-field-required','delete-field',
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
       'sign-dialog','sign-pages','finish-signing','sign-progress','next-required-field',
@@ -1231,6 +1231,11 @@
     container.append(wrapper);
     await page.render({ canvasContext: context, viewport }).promise;
     fields.filter(field => Number(field.page_number) === pageNumber).forEach(field => wrapper.append(createFieldOverlay(field, mode)));
+    if (mode === 'prepare') {
+      wrapper.classList.add('signature-placement-page');
+      wrapper.setAttribute('aria-label', 'Haz clic en el documento para colocar un espacio de firma');
+      wrapper.addEventListener('click', placePreparedFieldFromPageClick);
+    }
     return wrapper;
   }
 
@@ -1332,29 +1337,47 @@
     qsa('.field-overlay', els['prepare-pages']).forEach(element => element.classList.toggle('selected', element.dataset.fieldId === id));
   }
 
-  function addPreparedField() {
+  function placePreparedFieldFromPageClick(event) {
     const prepare = state.prepare;
+    if (!prepare) return;
+
+    // Los clics sobre un cuadro existente sirven para seleccionarlo, no para crear otro.
+    if (event.target.closest('.field-overlay')) return;
+
     const assignedTo = els['field-assignee'].value;
-    if (!prepare || !assignedTo) throw new Error('Selecciona al firmante.');
+    if (!assignedTo) {
+      toast('Primero selecciona a la persona que firmará.', true);
+      els['field-assignee'].focus();
+      return;
+    }
+
+    const page = event.currentTarget;
+    const rect = page.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
     const [width, height] = defaultFieldSize();
-    const offset = (prepare.fields.filter(field => Number(field.page_number) === prepare.page).length % 8) * 2;
+    const clickX = (event.clientX - rect.left) / rect.width * 100;
+    const clickY = (event.clientY - rect.top) / rect.height * 100;
+
     const field = {
       id: crypto.randomUUID(),
       document_id: prepare.doc.id,
       assigned_to: assignedTo,
       field_type: 'signature',
       page_number: prepare.page,
-      x_pct: 8 + offset,
-      y_pct: 10 + offset,
+      x_pct: Math.max(0, Math.min(100 - width, clickX - width / 2)),
+      y_pct: Math.max(0, Math.min(100 - height, clickY - height / 2)),
       width_pct: width,
       height_pct: height,
       required: true,
       label: els['field-label'].value.trim() || 'Firma',
       placeholder: ''
     };
+
     prepare.fields.push(field);
     prepare.selectedId = field.id;
     renderPreparePage().then(() => selectPreparedField(field.id));
+    toast(`Espacio de firma colocado para ${profileName(assignedTo)}.`);
   }
 
   function startFieldPointer(event) {
@@ -1772,7 +1795,6 @@
     els['save-flow'].addEventListener('click', saveFlow);
     els['profile-form'].addEventListener('submit', updateProfile);
     ['profile-name','profile-department','profile-phone'].forEach(id => byId(id).addEventListener('input', saveProfileDraft));
-    els['add-field'].addEventListener('click', addPreparedField);
     els['prepare-save'].addEventListener('click', () => savePreparedFields(false));
     els['prepare-save-submit'].addEventListener('click', () => savePreparedFields(true));
     els['prepare-prev-page'].addEventListener('click', () => { if(state.prepare && state.prepare.page>1){state.prepare.page--;renderPreparePage();} });

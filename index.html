@@ -251,34 +251,6 @@
               </label>
             </div>
             <div class="logic-note"><strong>Regla del sistema:</strong> nunca se puede firmar antes de terminar las aprobaciones cuando eliges el proceso recomendado.</div>
-            <div class="delivery-settings">
-              <div>
-                <p class="eyebrow dark">Seguimiento automático</p>
-                <h3>Fecha límite y recordatorios</h3>
-                <p class="muted small">Los correos solo incluyen un aviso y un enlace seguro; nunca adjuntan el documento.</p>
-              </div>
-              <div class="form-grid three">
-                <label>Días para completar
-                  <input id="doc-due-days" type="number" min="1" max="365" value="10" required />
-                </label>
-                <label>Primer recordatorio
-                  <select id="doc-first-reminder-hours">
-                    <option value="12">Después de 12 horas</option>
-                    <option value="24" selected>Después de 24 horas</option>
-                    <option value="48">Después de 48 horas</option>
-                    <option value="72">Después de 72 horas</option>
-                  </select>
-                </label>
-                <label>Repetir recordatorio
-                  <select id="doc-repeat-reminder-hours">
-                    <option value="12">Cada 12 horas</option>
-                    <option value="24" selected>Cada 24 horas</option>
-                    <option value="48">Cada 48 horas</option>
-                    <option value="72">Cada 72 horas</option>
-                  </select>
-                </label>
-              </div>
-            </div>
           </section>
 
           <section class="wizard-panel hidden" data-wizard-step="3">
@@ -379,14 +351,6 @@
           <div><p class="eyebrow dark">Supervisión</p><h2>Auditoría de conversaciones</h2><p class="muted">Los administradores autorizados pueden consultar las conversaciones corporativas para investigar incidentes y dar cumplimiento. Este acceso debe estar informado en el aviso de privacidad.</p></div>
           <button class="secondary" data-go-section="messages" type="button">Abrir conversaciones</button>
         </div>
-        <div class="panel stack">
-          <div class="panel-header wrap">
-            <div><p class="eyebrow dark">Entrega</p><h2>Correo automático</h2><p class="muted small">Estado de la cola de Gmail, recordatorios y privacidad del contenido.</p></div>
-            <button id="refresh-email-status" class="secondary" type="button">Actualizar estado</button>
-          </div>
-          <div id="email-system-status" class="email-status-grid"><div class="empty">Cargando estado de correo…</div></div>
-          <div id="email-delivery-list"></div>
-        </div>
       </section>
     </section>
   </div>
@@ -417,8 +381,11 @@
         <div class="field-step"><span>1</span><strong>Elige quién firmará</strong></div>
         <label>Firmante<select id="field-assignee"></select></label>
         <label>Nombre del espacio<input id="field-label" maxlength="120" placeholder="Ej. Firma del proveedor" value="Firma" /></label>
-        <div class="field-step"><span>2</span><strong>Agrega el espacio</strong></div>
-        <button id="add-field" class="primary full" type="button">Agregar espacio de firma en esta página</button>
+        <div class="field-step"><span>2</span><strong>Haz clic donde debe ir la firma</strong></div>
+        <div class="placement-instruction" role="note">
+          <span class="placement-cursor">＋</span>
+          <div><strong>Modo de colocación activo</strong><p>Con el firmante seleccionado, haz clic directamente sobre el PDF. El cuadro aparecerá centrado en esa zona.</p></div>
+        </div>
         <hr />
         <div id="selected-field-panel" class="stack hidden">
           <strong>Espacio seleccionado</strong>
@@ -426,7 +393,7 @@
           <label>Nombre<input id="selected-field-label" maxlength="120" /></label>
           <button id="delete-field" class="danger" type="button">Eliminar espacio</button>
         </div>
-        <div class="field-help small muted"><p><strong>Requisito:</strong> cada firmante necesita por lo menos un espacio.</p><p>Arrastra el cuadro para moverlo y usa el punto de la esquina para cambiar su tamaño.</p></div>
+        <div class="field-help small muted"><p><strong>Requisito:</strong> cada firmante necesita por lo menos un espacio.</p><p>Después de colocarlo, arrastra el cuadro para moverlo y usa el punto de la esquina para cambiar su tamaño. Para agregar otro, vuelve a hacer clic en el PDF.</p></div>
       </aside>
       <section class="pdf-workspace">
         <div class="pdf-toolbar"><button id="prepare-prev-page" class="secondary" type="button">←</button><span>Página <strong id="prepare-page-number">1</strong> de <strong id="prepare-page-count">1</strong></span><button id="prepare-next-page" class="secondary" type="button">→</button><span class="toolbar-separator"></span><button id="prepare-zoom-out" class="secondary" type="button">−</button><span id="prepare-zoom-label">100%</span><button id="prepare-zoom-in" class="secondary" type="button">+</button></div>
