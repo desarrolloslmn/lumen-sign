@@ -135,6 +135,7 @@
       </div>
       <div class="sidebar-footer">
         <div id="sidebar-user" class="small"></div>
+        <div class="app-version">Lumen Sign 6.0 · Profesional</div>
         <button id="logout-button" class="secondary full" type="button">Cerrar sesión</button>
       </div>
     </aside>
@@ -184,7 +185,7 @@
                 <option value="awaiting_signature">En firma</option>
                 <option value="completed">Completado</option>
                 <option value="rejected">Rechazado</option>
-                <option value="cancelled">Cancelado</option>
+                <option value="paused">Pausado</option><option value="expired">Vencido</option><option value="cancelled">Cancelado</option>
               </select>
             </div>
           </div>
@@ -206,6 +207,10 @@
 
           <section class="wizard-panel" data-wizard-step="1">
             <div class="step-title"><span>1</span><div><h3>Datos y archivos</h3><p>Sube el PDF que circulará durante todo el proceso.</p></div></div>
+            <label class="template-selector">Plantilla opcional
+              <select id="document-template"><option value="">Crear sin plantilla</option></select>
+              <span class="muted small">Aplica responsables, orden, recordatorios y posiciones de firma guardadas.</span>
+            </label>
             <div class="form-grid">
               <label>Título
                 <input id="doc-title" required maxlength="180" placeholder="Ej. Contrato proveedor ABC" />
@@ -252,6 +257,18 @@
               </label>
             </div>
             <div class="logic-note"><strong>Regla del sistema:</strong> nunca se puede firmar antes de terminar las aprobaciones cuando eliges el proceso recomendado.</div>
+
+            <div class="routing-settings">
+              <div><p class="eyebrow dark">Forma de trabajo</p><h3>Orden de cada etapa</h3><p class="muted small">En paralelo, todas las personas de la etapa reciben la tarea al mismo tiempo.</p></div>
+              <div class="form-grid two">
+                <label>Orden de aprobaciones
+                  <select id="approval-routing"><option value="sequential">Una persona después de otra</option><option value="parallel">Todos pueden aprobar en cualquier orden</option></select>
+                </label>
+                <label>Orden de firmas
+                  <select id="signature-routing"><option value="sequential">Una persona después de otra</option><option value="parallel">Todos pueden firmar en cualquier orden</option></select>
+                </label>
+              </div>
+            </div>
 
             <div class="delivery-settings">
               <div>
@@ -367,6 +384,10 @@
           <div class="role-legend"><span><b>Aprobador</b> revisa y autoriza</span><span><b>Firmante</b> aplica su firma</span><span><b>Contratos</b> crea y corrige documentos</span></div>
         </div>
         <div class="panel">
+          <div class="panel-header wrap"><div><p class="eyebrow dark">Indicadores</p><h2>Control operativo</h2><p class="muted small">Resumen de documentos, vencimientos y tiempos del proceso.</p></div><button id="refresh-admin-dashboard" class="secondary" type="button">Actualizar indicadores</button></div>
+          <div id="admin-dashboard" class="admin-metrics"></div>
+        </div>
+        <div class="panel">
           <div class="panel-header wrap"><div><h2>Usuarios registrados</h2><p class="muted small">Solo el superadministrador puede crear otros administradores.</p></div><button id="refresh-users" class="secondary" type="button">Actualizar</button></div>
           <div id="admin-users-table"></div>
         </div>
@@ -383,6 +404,10 @@
           <div id="email-delivery-list"></div>
         </div>
 
+        <div class="panel">
+          <div class="panel-header wrap"><div><p class="eyebrow dark">Productividad</p><h2>Plantillas activas</h2><p class="muted small">Reutiliza participantes, orden, recordatorios y posiciones de firma.</p></div><button id="refresh-templates" class="secondary" type="button">Actualizar plantillas</button></div>
+          <div id="template-list"></div>
+        </div>
         <div class="panel audit-panel">
           <div><p class="eyebrow dark">Supervisión</p><h2>Auditoría de conversaciones</h2><p class="muted">Los administradores autorizados pueden consultar las conversaciones corporativas para investigar incidentes y dar cumplimiento. Este acceso debe estar informado en el aviso de privacidad.</p></div>
           <button class="secondary" data-go-section="messages" type="button">Abrir conversaciones</button>
@@ -396,36 +421,13 @@
     <div id="document-detail"></div>
   </dialog>
 
-  <dialog id="preview-dialog" class="dialog visual-dialog preview-dialog">
-    <form method="dialog"><button class="dialog-close" aria-label="Cerrar vista previa">×</button></form>
-    <div class="visual-header preview-header">
-      <div>
-        <p class="eyebrow dark">Vista previa</p>
-        <h2 id="preview-title">Documento</h2>
-        <p class="muted">Revisa todas las páginas antes de aprobar, rechazar o firmar.</p>
-      </div>
-      <div class="button-row">
-        <button id="preview-back-document" class="secondary" type="button">Volver al expediente</button>
-        <button id="preview-download" class="secondary" type="button">Descargar</button>
-      </div>
-    </div>
-    <section class="pdf-workspace preview-workspace">
-      <div class="pdf-toolbar">
-        <button id="preview-prev-page" class="secondary" type="button">← Anterior</button>
-        <span>Página <strong id="preview-page-number">1</strong> de <strong id="preview-page-count">1</strong></span>
-        <button id="preview-next-page" class="secondary" type="button">Siguiente →</button>
-        <span class="toolbar-separator"></span>
-        <button id="preview-zoom-out" class="secondary" type="button">−</button>
-        <span id="preview-zoom-label">100%</span>
-        <button id="preview-zoom-in" class="secondary" type="button">+</button>
-      </div>
-      <div id="preview-pages" class="pdf-pages preview-pages"></div>
-    </section>
-  </dialog>
-
   <dialog id="flow-dialog" class="dialog flow-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
     <div class="dialog-heading"><p class="eyebrow dark">Borrador</p><h2>Modificar responsables</h2><p class="muted">Solo está disponible antes de iniciar el proceso.</p></div>
+    <div class="form-grid two flow-routing">
+      <label>Orden de aprobaciones<select id="flow-approval-routing"><option value="sequential">Una persona después de otra</option><option value="parallel">Todos en paralelo</option></select></label>
+      <label>Orden de firmas<select id="flow-signature-routing"><option value="sequential">Una persona después de otra</option><option value="parallel">Todos en paralelo</option></select></label>
+    </div>
     <div class="stage-grid single">
       <div id="flow-approval-stage" class="stage-card"><div class="stage-header"><div><span class="stage-number">A</span><div><h3>Aprobación</h3><p>La persona superior revisa primero.</p></div></div><button id="flow-add-approver" class="secondary" type="button">Agregar</button></div><div id="flow-approvers-builder" class="ordered-list"></div></div>
       <div class="stage-card"><div class="stage-header"><div><span class="stage-number">F</span><div><h3>Firma</h3><p>La persona superior firma primero.</p></div></div><button id="flow-add-signer" class="secondary" type="button">Agregar</button></div><div id="flow-signers-builder" class="ordered-list"></div></div>
@@ -437,7 +439,7 @@
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
     <div class="visual-header">
       <div><p class="eyebrow dark">Último paso de configuración</p><h2>Indica dónde firma cada persona</h2><p class="muted">Solo se colocan firmas. Al iniciar el proceso ya no podrán moverse.</p></div>
-      <div class="button-row"><button id="prepare-save" class="secondary" type="button">Guardar borrador</button><button id="prepare-save-submit" class="primary" type="button">Guardar e iniciar proceso</button></div>
+      <div class="button-row"><button id="save-template-button" class="secondary" type="button">Guardar como plantilla</button><button id="prepare-save" class="secondary" type="button">Guardar borrador</button><button id="prepare-save-submit" class="primary" type="button">Guardar e iniciar proceso</button></div>
     </div>
     <div class="visual-layout">
       <aside class="field-panel">
@@ -465,11 +467,43 @@
     </div>
   </dialog>
 
+  <dialog id="preview-dialog" class="dialog visual-dialog preview-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
+    <div class="visual-header preview-header">
+      <div><p class="eyebrow dark">Vista previa privada</p><h2 id="preview-title">Documento</h2><p class="muted">Revisa todas las páginas sin descargar el archivo.</p></div>
+      <div class="button-row"><button id="preview-back-document" class="secondary" type="button">Volver al expediente</button><button id="preview-download" class="secondary" type="button">Descargar</button></div>
+    </div>
+    <section class="pdf-workspace preview-workspace">
+      <div class="pdf-toolbar"><button id="preview-prev-page" class="secondary" type="button">←</button><span>Página <strong id="preview-page-number">1</strong> de <strong id="preview-page-count">1</strong></span><button id="preview-next-page" class="secondary" type="button">→</button><span class="toolbar-separator"></span><button id="preview-zoom-out" class="secondary" type="button">−</button><span id="preview-zoom-label">100%</span><button id="preview-zoom-in" class="secondary" type="button">+</button></div>
+      <div id="preview-pages" class="pdf-pages preview-pages"></div>
+    </section>
+  </dialog>
+
   <dialog id="sign-dialog" class="dialog visual-dialog sign-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
     <div class="visual-header"><div><p class="eyebrow dark">Tu turno</p><h2>Revisa y coloca tu firma</h2><p class="muted">Presiona cada espacio asignado para aplicar tu firma. Los espacios de otras personas están bloqueados.</p></div><button id="finish-signing" class="primary" type="button">Finalizar mi firma</button></div>
     <div class="signing-summary"><span id="sign-progress">0 de 0 firmas colocadas</span><button id="next-required-field" class="secondary" type="button">Ir al siguiente espacio</button></div>
     <div id="sign-pages" class="pdf-pages sign-pages"></div>
+  </dialog>
+
+  <dialog id="sign-confirm-dialog" class="dialog sign-confirm-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
+    <div class="dialog-heading"><p class="eyebrow dark">Confirmación de identidad</p><h2>Autoriza tu firma electrónica</h2><p class="muted">Vuelve a escribir tu contraseña y acepta el consentimiento antes de finalizar.</p></div>
+    <form id="sign-confirm-form" class="stack">
+      <label>Contraseña actual<div class="password-field"><input id="sign-confirm-password" type="password" autocomplete="current-password" required /><button id="sign-confirm-password-toggle" class="password-hold" type="button" aria-label="Mantener presionado para mostrar contraseña">◉</button></div></label>
+      <label class="consent-box"><input id="sign-consent" type="checkbox" required /><span>Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.</span></label>
+      <button class="primary" type="submit">Confirmar y finalizar firma</button>
+    </form>
+  </dialog>
+
+  <dialog id="template-dialog" class="dialog template-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
+    <div class="dialog-heading"><p class="eyebrow dark">Plantilla reutilizable</p><h2>Guardar configuración</h2><p class="muted">Guarda responsables, orden, recordatorios y posiciones. El PDF no se guarda en la plantilla.</p></div>
+    <form id="template-form" class="stack">
+      <label>Nombre de la plantilla<input id="template-name" maxlength="160" required placeholder="Ej. Contrato de proveedor" /></label>
+      <label>Descripción<textarea id="template-description" rows="3" maxlength="1000"></textarea></label>
+      <button class="primary" type="submit">Guardar plantilla</button>
+    </form>
   </dialog>
 
   <dialog id="conversation-dialog" class="dialog conversation-dialog">

@@ -18,6 +18,9 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
+  const APP_VERSION = '6.0.0';
+  const CONSENT_VERSION = 'LS-2026-06';
+  const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
     session: null,
     profile: null,
@@ -36,7 +39,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: []
+    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: []
   };
 
   const els = {};
@@ -65,8 +68,8 @@
   const statusLabels = {
     pending: 'Pendiente', active: 'Activo', suspended: 'Suspendido',
     draft: 'Borrador', awaiting_approval: 'En aprobación', awaiting_signature: 'En firma',
-    completed: 'Completado', rejected: 'Rechazado', cancelled: 'Cancelado',
-    approved: 'Aprobado', signed: 'Firmado'
+    completed: 'Completado', rejected: 'Rechazado', cancelled: 'Cancelado', paused: 'Pausado', expired: 'Vencido',
+    approved: 'Aprobado', signed: 'Firmado', ready: 'Listo', processing: 'Procesando', failed: 'Fallido'
   };
   const participantRoleLabels = { editor: 'Editor', approver: 'Aprobador', signer: 'Firmante', viewer: 'Consulta' };
 
@@ -89,7 +92,9 @@
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
       'sign-dialog','sign-pages','finish-signing','sign-progress','next-required-field',
       'preview-dialog','preview-title','preview-pages','preview-page-number','preview-page-count','preview-prev-page','preview-next-page','preview-zoom-in','preview-zoom-out','preview-zoom-label','preview-back-document','preview-download',
-      'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list'
+      'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list',
+      'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
+      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-consent'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
   }
@@ -119,9 +124,9 @@
 
   function pill(value) {
     const label = statusLabels[value] || value || '—';
-    const cls = ['completed','approved','signed','active'].includes(value) ? 'success'
-      : ['rejected','cancelled','suspended'].includes(value) ? 'danger'
-      : ['pending','awaiting_approval','awaiting_signature'].includes(value) ? 'warning' : '';
+    const cls = ['completed','approved','signed','active','ready'].includes(value) ? 'success'
+      : ['rejected','cancelled','suspended','expired','failed'].includes(value) ? 'danger'
+      : ['pending','awaiting_approval','awaiting_signature','paused','processing'].includes(value) ? 'warning' : '';
     return `<span class="pill ${cls}">${escapeHtml(label)}</span>`;
   }
 
@@ -242,7 +247,7 @@
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
     state.sessionLoadPromise = (async () => {
       await loadProfile(); showApp(); configureAppForProfile();
-      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus()]);
+      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard()]);
       renderAll(); startLiveSync(); state.loadedUserId = userId;
     })();
     try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
@@ -285,6 +290,56 @@
     });
   }
 
+  async function loadTemplates() {
+    const { data, error } = await client.rpc('list_document_templates');
+    if (error) {
+      console.warn('No se pudieron cargar las plantillas.', error);
+      state.templates = [];
+    } else {
+      state.templates = data || [];
+    }
+    renderTemplateOptions();
+  }
+
+  async function loadAdminDashboard() {
+    if (!isAdmin()) { state.adminDashboard = null; return; }
+    const { data, error } = await client.rpc('get_admin_dashboard');
+    if (error) throw error;
+    state.adminDashboard = data || {};
+  }
+
+  function renderTemplateOptions() {
+    if (!els['document-template']) return;
+    const selected = els['document-template'].value;
+    els['document-template'].innerHTML = '<option value="">Crear sin plantilla</option>' + state.templates.map(template => `<option value="${template.id}">${escapeHtml(template.name)}</option>`).join('');
+    if (state.templates.some(template => template.id === selected)) els['document-template'].value = selected;
+  }
+
+  function renderTemplateList() {
+    if (!els['template-list']) return;
+    if (!state.templates.length) {
+      els['template-list'].innerHTML = '<div class="empty">Todavía no hay plantillas guardadas.</div>';
+      return;
+    }
+    els['template-list'].innerHTML = `<div class="template-grid">${state.templates.map(template => `<article class="template-card"><div><strong>${escapeHtml(template.name)}</strong><p class="muted small">${escapeHtml(template.description || 'Sin descripción')}</p><p class="small">${template.workflow_mode === 'signature_only' ? 'Solo firmas' : 'Aprobación y firmas'} · ${template.signature_routing === 'parallel' ? 'Firmas en paralelo' : 'Firmas en orden'}</p></div>${isAdmin() || isContracts() ? `<button class="danger" data-delete-template="${template.id}" type="button">Desactivar</button>` : ''}</article>`).join('')}</div>`;
+  }
+
+  function renderAdminDashboard() {
+    if (!els['admin-dashboard']) return;
+    const data = state.adminDashboard || {};
+    const cards = [
+      ['Documentos', data.documents_total ?? 0],
+      ['En aprobación', data.awaiting_approval ?? 0],
+      ['En firma', data.awaiting_signature ?? 0],
+      ['Vencidos', data.overdue ?? 0],
+      ['Pausados', data.paused ?? 0],
+      ['Correos fallidos', data.emails_failed ?? 0],
+      ['Usuarios activos', data.active_users ?? 0],
+      ['Promedio de cierre', `${data.avg_completion_hours ?? 0} h`]
+    ];
+    els['admin-dashboard'].innerHTML = cards.map(([label,value]) => `<div class="metric-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+  }
+
   async function loadDocuments() {
     if (!isActive()) { state.documents = []; return; }
     const { data, error } = await client.from('documents').select('*').order('updated_at', { ascending: false });
@@ -319,9 +374,11 @@
       const stageRows = allPending.filter(row => row.document_id === task.document_id && row.participant_role === expectedRole);
       const minSequence = stageRows.length ? Math.min(...stageRows.map(row => Number(row.sequence))) : null;
       const isActionable = task.participant_role === expectedRole && Number(task.sequence) === minSequence;
-      const waitingReason = expectedRole !== task.participant_role
-        ? (expectedRole === 'approver' ? 'La aprobación todavía no termina.' : 'La firma todavía no inicia.')
-        : !isActionable ? 'Otra persona debe actuar antes que tú.' : '';
+      const waitingReason = task.documents.status === 'paused' ? 'El proceso está pausado por el propietario o un administrador.'
+        : task.documents.status === 'cancelled' ? 'El proceso fue cancelado.'
+        : expectedRole !== task.participant_role
+          ? (expectedRole === 'approver' ? 'La aprobación todavía no termina.' : 'La firma todavía no inicia.')
+          : !isActionable ? 'Otra persona debe actuar antes que tú.' : '';
       return { ...task, is_actionable: isActionable, waiting_reason: waitingReason };
     });
   }
@@ -519,6 +576,7 @@
     els['pending-banner'].classList.toggle('hidden', p.status === 'active');
     els['admin-nav'].classList.toggle('hidden', !isAdmin());
     qsa('[data-section="new-document"], [data-section="tasks"], [data-section="messages"], [data-section="notifications"]').forEach(btn => btn.disabled = !isActive());
+    if (els['save-template-button']) els['save-template-button'].classList.toggle('hidden', !(isAdmin() || isContracts()));
     fillProfileForm(forceProfileForm);
   }
 
@@ -569,7 +627,7 @@
     renderNotifications();
     renderConversations();
     updateUnreadBadges();
-    if (isAdmin()) { renderAdminUsers(); renderEmailSystemStatus(); }
+    if (isAdmin()) { renderAdminUsers(); renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); }
   }
 
   function renderDashboard() {
@@ -893,7 +951,7 @@
     if (section === 'new-document') setWizardStep(state.wizardStep || 1);
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
     if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
-    if (section === 'admin' && isAdmin()) { loadEmailSystemStatus().then(renderEmailSystemStatus).catch(error => toast(error.message, true)); }
+    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadAdminDashboard(), loadTemplates()]).then(() => { renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); }).catch(error => toast(error.message, true)); }
   }
 
   function allowedRolesForParticipant(role) {
@@ -938,16 +996,21 @@
     renumberOrdered(container);
   }
 
-  function readOrderedParticipants(approverContainer, signerContainer, workflowMode = 'approval_signature') {
-    const read = (container,role) => qsa('.ordered-row',container).map((row,index) => ({ user_id:row.querySelector('.ordered-user').value, participant_role:role, sequence:index+1 })).filter(item => item.user_id);
-    const approvers = workflowMode === 'signature_only' ? [] : read(approverContainer,'approver');
-    const signers = read(signerContainer,'signer');
-    return [...approvers,...signers];
+  function readOrderedParticipants(approverContainer, signerContainer, workflowMode = 'approval_signature', approvalRouting = approvalRoutingMode(), signatureRouting = signatureRoutingMode()) {
+    const read = (container, role, routing) => qsa('.ordered-row', container)
+      .map((row,index) => ({ user_id: row.querySelector('.ordered-user').value, participant_role: role, sequence: routing === 'parallel' ? 1 : index + 1 }))
+      .filter(item => item.user_id);
+    const approvers = workflowMode === 'signature_only' ? [] : read(approverContainer, 'approver', approvalRouting);
+    const signers = read(signerContainer, 'signer', signatureRouting);
+    return [...approvers, ...signers];
   }
 
   function workflowMode() {
     return document.querySelector('input[name="workflow-mode"]:checked')?.value || 'approval_signature';
   }
+
+  function approvalRoutingMode() { return byId('approval-routing')?.value || 'sequential'; }
+  function signatureRoutingMode() { return byId('signature-routing')?.value || 'sequential'; }
 
   function setWorkflowMode(mode) {
     qsa('.workflow-card').forEach(card => card.classList.toggle('selected', card.querySelector('input').value === mode));
@@ -1002,7 +1065,79 @@
     const dueDays = numberInputValue('doc-due-days', 10);
     const firstReminder = numberInputValue('doc-first-reminder-hours', 24);
     const repeatReminder = numberInputValue('doc-repeat-reminder-hours', 24);
-    els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Aprobar y después firmar':'Solo firmas'}</strong></p><p class="muted">Fecha límite: ${dueDays} días. Primer recordatorio: ${firstReminder} h; después cada ${repeatReminder} h.</p></div><div class="review-card"><h4>Aprobadores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
+    els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Aprobar y después firmar':'Solo firmas'}</strong></p><p class="muted">Aprobaciones: ${approvalRoutingMode()==='parallel'?'en paralelo':'en orden'} · Firmas: ${signatureRoutingMode()==='parallel'?'en paralelo':'en orden'}.</p><p class="muted">Fecha límite: ${dueDays} días. Primer recordatorio: ${firstReminder} h; después cada ${repeatReminder} h.</p></div><div class="review-card"><h4>Aprobadores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
+  }
+
+  function applySelectedTemplate() {
+    const id = byId('document-template')?.value;
+    const template = state.templates.find(item => item.id === id);
+    state.selectedTemplateFields = [];
+    if (!template) return;
+
+    byId('doc-category').value = template.category || 'other';
+    const modeInput = document.querySelector(`input[name="workflow-mode"][value="${template.workflow_mode || 'approval_signature'}"]`);
+    if (modeInput) modeInput.checked = true;
+    setWorkflowMode(template.workflow_mode || 'approval_signature');
+    byId('approval-routing').value = template.approval_routing || 'sequential';
+    byId('signature-routing').value = template.signature_routing || 'sequential';
+    setInputValue('doc-due-days', template.due_days || 10);
+    setInputValue('doc-first-reminder-hours', template.first_reminder_hours || 24);
+    setInputValue('doc-repeat-reminder-hours', template.repeat_reminder_hours || 24);
+
+    els['approvers-builder'].innerHTML = '';
+    els['signers-builder'].innerHTML = '';
+    const participants = Array.isArray(template.participants) ? template.participants : [];
+    participants.filter(item => item.participant_role === 'approver').sort((a,b) => Number(a.sequence)-Number(b.sequence)).forEach(item => addOrderedParticipant(els['approvers-builder'], 'approver', item.user_id));
+    participants.filter(item => item.participant_role === 'signer').sort((a,b) => Number(a.sequence)-Number(b.sequence)).forEach(item => addOrderedParticipant(els['signers-builder'], 'signer', item.user_id));
+    if (template.workflow_mode !== 'signature_only' && !qsa('.ordered-row', els['approvers-builder']).length) addOrderedParticipant(els['approvers-builder'], 'approver');
+    if (!qsa('.ordered-row', els['signers-builder']).length) addOrderedParticipant(els['signers-builder'], 'signer');
+    state.selectedTemplateFields = Array.isArray(template.fields) ? template.fields : [];
+    toast(`Plantilla “${template.name}” aplicada.`);
+  }
+
+  async function saveCurrentDocumentAsTemplate(event) {
+    event?.preventDefault();
+    const prepare = state.prepare;
+    if (!prepare) throw new Error('Abre un borrador preparado para guardar una plantilla.');
+    const name = byId('template-name').value.trim();
+    if (!name) throw new Error('Escribe el nombre de la plantilla.');
+    await run(async () => {
+      const payload = prepare.fields.map(field => ({
+        id: field.id,
+        assigned_to: field.assigned_to,
+        field_type: 'signature',
+        page_number: Number(field.page_number),
+        x_pct: Number(Number(field.x_pct).toFixed(4)),
+        y_pct: Number(Number(field.y_pct).toFixed(4)),
+        width_pct: Number(Number(field.width_pct).toFixed(4)),
+        height_pct: Number(Number(field.height_pct).toFixed(4)),
+        required: true,
+        label: field.label || 'Firma',
+        placeholder: ''
+      }));
+      const savedFields = await client.rpc('save_document_fields', { p_document_id: prepare.doc.id, p_fields: payload });
+      if (savedFields.error) throw savedFields.error;
+      const { error } = await client.rpc('save_document_as_template', {
+        p_document_id: prepare.doc.id,
+        p_name: name,
+        p_description: byId('template-description').value.trim()
+      });
+      if (error) throw error;
+      els['template-dialog'].close();
+      byId('template-form').reset();
+      await loadTemplates();
+      renderTemplateList();
+    }, 'Plantilla guardada.');
+  }
+
+  async function deleteTemplate(id) {
+    if (!confirm('¿Desactivar esta plantilla? Los documentos existentes no cambiarán.')) return;
+    await run(async () => {
+      const { error } = await client.rpc('delete_document_template', { p_template_id: id });
+      if (error) throw error;
+      await loadTemplates();
+      renderTemplateList();
+    }, 'Plantilla desactivada.');
   }
 
   function resetDocumentWizard() {
@@ -1014,6 +1149,10 @@
     setInputValue('doc-due-days', 10);
     setInputValue('doc-first-reminder-hours', 24);
     setInputValue('doc-repeat-reminder-hours', 24);
+    if (byId('approval-routing')) byId('approval-routing').value = 'sequential';
+    if (byId('signature-routing')) byId('signature-routing').value = 'sequential';
+    if (byId('document-template')) byId('document-template').value = '';
+    state.selectedTemplateFields = [];
     setWizardStep(1);
   }
 
@@ -1022,6 +1161,7 @@
     if (!isActive()) throw new Error('Tu cuenta no está activa.');
     validateWizardStep(1); validateWizardStep(3);
     const file=byId('doc-file').files[0], attachment=byId('doc-attachment').files[0];
+    await validatePdfSignature(file);
     const participants=readOrderedParticipants(els['approvers-builder'],els['signers-builder'],workflowMode());
     let newDocId=null;
     await run(async()=>{
@@ -1031,7 +1171,23 @@
       const upload=await client.storage.from('documents').upload(filePath,file,{contentType:file.type||'application/pdf',upsert:false});if(upload.error)throw upload.error;
       const attached=await client.rpc('attach_primary_file',{p_document_id:docId,p_file_path:filePath,p_file_name:file.name,p_file_hash:hash,p_mime_type:file.type||'application/pdf',p_size_bytes:file.size});if(attached.error)throw attached.error;
       if(attachment){const path=`${docId}/attachments/${Date.now()}-${safeFilename(attachment.name)}`,attachmentHash=await sha256(attachment);const up=await client.storage.from('documents').upload(path,attachment,{contentType:attachment.type||'application/octet-stream'});if(up.error)throw up.error;const rec=await client.rpc('add_document_attachment',{p_document_id:docId,p_file_path:path,p_file_name:attachment.name,p_file_hash:attachmentHash,p_mime_type:attachment.type||'application/octet-stream',p_size_bytes:attachment.size});if(rec.error)throw rec.error;}
+      const routing=await client.rpc('configure_document_workflow',{p_document_id:docId,p_approval_routing:approvalRoutingMode(),p_signature_routing:signatureRoutingMode()});if(routing.error)throw routing.error;
       const flow=await client.rpc('set_document_participants',{p_document_id:docId,p_items:participants});if(flow.error)throw flow.error;
+      if (state.selectedTemplateFields.length) {
+        const selectedTemplate = state.templates.find(template => template.id === byId('document-template').value);
+        const oldSigners = (selectedTemplate?.participants || []).filter(item => item.participant_role === 'signer').sort((a,b) => Number(a.sequence)-Number(b.sequence));
+        const newSigners = participants.filter(item => item.participant_role === 'signer').sort((a,b) => Number(a.sequence)-Number(b.sequence));
+        const signerMap = new Map(oldSigners.map((item,index) => [item.user_id, newSigners[index]?.user_id || item.user_id]));
+        const templateFields = state.selectedTemplateFields.map(field => ({
+          ...field,
+          id: crypto.randomUUID(),
+          assigned_to: signerMap.get(field.assigned_to) || field.assigned_to,
+          field_type: 'signature',
+          required: true
+        }));
+        const fieldResult = await client.rpc('save_document_fields', { p_document_id: docId, p_fields: templateFields });
+        if (fieldResult.error) throw fieldResult.error;
+      }
       const dueDays = numberInputValue('doc-due-days', 10);
       const dueAt = new Date(Date.now() + dueDays * 86400000).toISOString();
       const delivery = await client.rpc('configure_document_delivery', {
@@ -1051,6 +1207,12 @@
     if (!file) return;
     if (file.size > MAX_FILE_MB * 1024 * 1024) throw new Error(`El archivo excede ${MAX_FILE_MB} MB.`);
     if (mimeTypes.length && !mimeTypes.includes(file.type) && !file.name.toLowerCase().endsWith('.pdf')) throw new Error('El documento principal debe ser PDF.');
+  }
+
+  async function validatePdfSignature(file) {
+    const header = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+    const magic = String.fromCharCode(...header);
+    if (magic !== '%PDF-') throw new Error('El archivo seleccionado no contiene una firma PDF válida.');
   }
 
   async function openDocument(id) {
@@ -1086,6 +1248,7 @@
     const isAssignedEditor=participants.some(item=>item.user_id===me&&item.participant_role==='editor');
     const canConfigure=doc.status==='draft'&&(doc.owner_id===me||isAdmin()||isContracts()||isAssignedEditor);
     const canReplace=(doc.status==='draft'&&(doc.owner_id===me||isAdmin()||isContracts()||isAssignedEditor))||(doc.status==='rejected'&&(isAdmin()||isContracts()));
+    const canManage=(doc.owner_id===me||isAdmin()||isContracts());
     const approvers=participants.filter(item=>item.participant_role==='approver').sort((a,b)=>a.sequence-b.sequence);
     const signers=participants.filter(item=>item.participant_role==='signer').sort((a,b)=>a.sequence-b.sequence);
     const hasFields=fields.length>0;
@@ -1095,7 +1258,7 @@
       {key:'signature',label:'Firmas'},
       {key:'completed',label:'Completado'}
     ];
-    const rank={draft:0,rejected:0,awaiting_approval:1,awaiting_signature:2,completed:3,cancelled:3};
+    const rank={draft:0,rejected:0,awaiting_approval:1,awaiting_signature:2,paused:2,completed:3,cancelled:3,expired:3};
     const currentRank=rank[doc.status]??0;
     const track=processSteps.map((step,index)=>`<div class="process-step ${index<currentRank?'done':index===currentRank?'current':'blocked'}">${index+1}. ${step.label}</div>`).join('');
     let guidance='';
@@ -1103,7 +1266,9 @@
     else if(doc.status==='awaiting_approval')guidance=myApproval?'Es tu turno de revisar y decidir.':'El documento está esperando a la persona que debe aprobar antes.';
     else if(doc.status==='awaiting_signature')guidance=mySignature?'Es tu turno de revisar y colocar tu firma.':'El documento está esperando a la persona que debe firmar antes.';
     else if(doc.status==='completed')guidance='El proceso terminó. La versión actual contiene las firmas aplicadas.';
-    else if(doc.status==='rejected')guidance='El documento fue rechazado. Contratos o un administrador debe corregirlo.';
+    else if(doc.status==='rejected')guidance='El documento fue rechazado. Crea una corrección conservando el historial original.';
+    else if(doc.status==='paused')guidance='El proceso está pausado. Nadie puede aprobar ni firmar hasta que se reanude.';
+    else if(doc.status==='cancelled')guidance='El proceso fue cancelado y quedó cerrado para nuevas acciones.';
 
     const primary=[];
     if(canConfigure&&!hasFields)primary.push(`<button class="primary" data-prepare-document="${doc.id}">Continuar: indicar dónde firman</button>`);
@@ -1111,21 +1276,140 @@
     if(myApproval)primary.push(`<button class="primary" data-preview-document="${doc.id}">1. Revisar PDF</button><button class="primary" data-approve-document="${doc.id}">2. Aprobar documento</button><button class="danger" data-reject-document="${doc.id}">Rechazar</button>`);
     if(mySignature)primary.push(`<button class="primary" data-sign-document="${doc.id}">Revisar y firmar</button>`);
     if(doc.status==='completed'&&doc.active_file_path)primary.push(`<button class="primary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar PDF final</button>`);
+    if(doc.status==='completed'&&doc.certificate_path)primary.push(`<button class="secondary" data-download-path="${escapeHtml(doc.certificate_path)}" data-download-name="certificado-de-finalizacion.pdf">Descargar certificado</button>`);
+    if(doc.status==='completed'&&doc.evidence_zip_path)primary.push(`<button class="secondary" data-download-path="${escapeHtml(doc.evidence_zip_path)}" data-download-name="paquete-de-evidencias.zip">Descargar evidencias ZIP</button>`);
+    if(doc.status==='completed'&&doc.finalization_status!=='ready')primary.push(`<button class="secondary" data-finalize-evidence="${doc.id}">${doc.finalization_status==='failed'?'Reintentar certificado':'Generar certificado'}</button>`);
     const secondary=[
       doc.active_file_path&&!myApproval&&!mySignature?`<button class="secondary preview-action" data-preview-document="${doc.id}">Vista previa del PDF</button>`:'',
       doc.active_file_path&&doc.status!=='completed'?`<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar actual</button>`:'',
       canConfigure&&hasFields?`<button class="secondary" data-prepare-document="${doc.id}">Editar espacios de firma</button>`:'',
       canConfigure?`<button class="secondary" data-configure-flow="${doc.id}">Cambiar responsables</button>`:'',
       canReplace?`<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>`:'',
+      canManage&&['awaiting_approval','awaiting_signature'].includes(doc.status)?`<button class="secondary" data-pause-document="${doc.id}">Pausar proceso</button>`:'',
+      canManage&&doc.status==='paused'?`<button class="primary" data-resume-document="${doc.id}">Reanudar proceso</button>`:'',
+      canManage&&!['completed','cancelled'].includes(doc.status)?`<button class="secondary" data-extend-deadline="${doc.id}">Extender fecha límite</button>`:'',
+      canManage&&!['completed','cancelled'].includes(doc.status)?`<button class="danger" data-cancel-document="${doc.id}">Cancelar proceso</button>`:'',
+      canManage&&['rejected','completed','cancelled'].includes(doc.status)?`<button class="secondary" data-create-correction="${doc.id}">Crear corrección</button>`:'',
+      (isAdmin()||isContracts())&&doc.status==='draft'&&hasFields?`<button class="secondary" data-save-document-template="${doc.id}">Guardar como plantilla</button>`:'',
       `<button class="secondary" data-document-chat="${doc.id}">Conversación del expediente</button>`
     ].join('');
-    const participantList=(items,title,letter)=>`<div class="participant-group"><h3>${title}</h3>${items.length?items.map((item,index)=>`<div class="participant-item"><span>${index===0?'1':index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${index===0?'Actúa primero':'Actúa después de la persona anterior'}${item.acted_at?` · ${fmtDate(item.acted_at)}`:''}</small></div>${pill(item.action_status)}</div>`).join(''):'<p class="muted">Esta etapa se omitió.</p>'}</div>`;
+    const participantList=(items,title,role)=>{
+      const routing = role==='approver' ? doc.approval_routing : doc.signature_routing;
+      return `<div class="participant-group"><h3>${title} <small class="muted">${routing==='parallel'?'en paralelo':'en orden'}</small></h3>${items.length?items.map((item,index)=>`<div class="participant-item"><span>${routing==='parallel'?'↔':index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${routing==='parallel'?'Puede actuar en cualquier orden':index===0?'Actúa primero':'Actúa después de la persona anterior'}${item.acted_at?` · ${fmtDate(item.acted_at)}`:''}</small></div>${pill(item.action_status)}${canManage&&item.action_status==='pending'&&['awaiting_approval','awaiting_signature','paused'].includes(doc.status)?`<button class="secondary compact" data-reassign-participant="${item.id}" data-reassign-document="${doc.id}" data-reassign-role="${item.participant_role}">Reasignar</button>`:''}</div>`).join(''):'<p class="muted">Esta etapa se omitió.</p>'}</div>`;
+    };
 
-    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div><div class="detail-tile"><strong>Fecha límite</strong><p>${fmtDate(doc.due_at)}</p></div></div><div class="participant-groups">${participantList(approvers,'Aprobaciones','A')}${participantList(signers,'Firmas','F')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
+    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div><div class="detail-tile"><strong>Fecha límite</strong><p>${fmtDate(doc.due_at)}</p></div><div class="detail-tile"><strong>Firmas</strong><p>${doc.signature_routing==='parallel'?'En paralelo':'En orden'}</p></div><div class="detail-tile"><strong>Evidencias</strong><p>${escapeHtml(doc.finalization_status||'pending')}</p></div></div><div class="participant-groups">${participantList(approvers,'Aprobaciones','approver')}${participantList(signers,'Firmas','signer')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
   }
 
   function eventLabel(action) {
-    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados'}[action] || action);
+    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados',routing_configured:'Orden del proceso configurado',document_paused:'Proceso pausado',document_resumed:'Proceso reanudado',document_cancelled:'Proceso cancelado',deadline_extended:'Fecha límite extendida',participant_reassigned:'Responsable reasignado',correction_draft_created:'Corrección creada',template_created:'Plantilla creada',evidence_package_generated:'Paquete de evidencias generado'}[action] || action);
+  }
+
+  async function pauseDocument(id) {
+    const reason = prompt('Motivo de la pausa (opcional):') || '';
+    await run(async () => {
+      const { error } = await client.rpc('pause_document', { p_document_id: id, p_reason: reason });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await refreshData();
+    }, 'Proceso pausado.');
+  }
+
+  async function resumeDocument(id) {
+    await run(async () => {
+      const { error } = await client.rpc('resume_document', { p_document_id: id });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await refreshData();
+    }, 'Proceso reanudado.');
+  }
+
+  async function cancelDocument(id) {
+    const reason = prompt('Escribe el motivo de cancelación:');
+    if (!reason?.trim()) return;
+    if (!confirm('La cancelación cerrará el proceso y no podrá deshacerse. ¿Continuar?')) return;
+    await run(async () => {
+      const { error } = await client.rpc('cancel_document', { p_document_id: id, p_reason: reason.trim() });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await refreshData();
+    }, 'Proceso cancelado.');
+  }
+
+  async function extendDeadline(id) {
+    const daysText = prompt('¿Cuántos días adicionales deseas agregar?', '5');
+    const days = Number(daysText);
+    if (!Number.isFinite(days) || days < 1 || days > 365) throw new Error('Escribe un número de días entre 1 y 365.');
+    const dueAt = new Date(Date.now() + days * 86400000).toISOString();
+    await run(async () => {
+      const { error } = await client.rpc('extend_document_deadline', { p_document_id: id, p_due_at: dueAt });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await refreshData();
+    }, 'Fecha límite actualizada.');
+  }
+
+  async function reassignParticipant(participantId, documentId, role) {
+    const email = prompt(`Correo del nuevo ${role === 'approver' ? 'aprobador' : 'firmante'}:`);
+    if (!email?.trim()) return;
+    const person = state.profiles.find(profile => profile.email.toLowerCase() === email.trim().toLowerCase() && profile.status === 'active');
+    if (!person) throw new Error('No se encontró un usuario activo con ese correo.');
+    await run(async () => {
+      const { error } = await client.rpc('reassign_pending_participant', {
+        p_document_id: documentId,
+        p_participant_id: participantId,
+        p_new_user_id: person.id
+      });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await refreshData();
+      await openDocument(documentId);
+    }, 'Responsable reasignado.');
+  }
+
+  async function createCorrection(id) {
+    const source = state.documents.find(document => document.id === id) || (await client.from('documents').select('*').eq('id', id).single()).data;
+    if (!source?.active_file_path) throw new Error('El expediente no tiene un archivo para copiar.');
+    const title = prompt('Título de la corrección:', `${source.title} — Corrección`) || '';
+    await run(async () => {
+      const { data: newId, error } = await client.rpc('create_correction_draft', { p_document_id: id, p_title: title.trim() || null });
+      if (error) throw error;
+      const signed = await client.storage.from('documents').createSignedUrl(source.active_file_path, 180);
+      if (signed.error) throw signed.error;
+      const response = await fetch(signed.data.signedUrl);
+      if (!response.ok) throw new Error('No se pudo copiar el PDF actual.');
+      const blob = await response.blob();
+      const hash = await sha256(await blob.arrayBuffer());
+      const path = `${newId}/v1/${Date.now()}-${safeFilename(source.active_file_name || 'documento.pdf')}`;
+      const upload = await client.storage.from('documents').upload(path, blob, { contentType: 'application/pdf', upsert: false });
+      if (upload.error) throw upload.error;
+      const attached = await client.rpc('attach_primary_file', {
+        p_document_id: newId,
+        p_file_path: path,
+        p_file_name: source.active_file_name || 'documento.pdf',
+        p_file_hash: hash,
+        p_mime_type: 'application/pdf',
+        p_size_bytes: blob.size
+      });
+      if (attached.error) throw attached.error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await refreshData();
+      await openPrepareDocument(newId);
+    }, 'Borrador de corrección creado.');
+  }
+
+  function openSaveTemplateDialog(documentId = null) {
+    if (documentId && (!state.prepare || state.prepare.doc.id !== documentId)) {
+      openPrepareDocument(documentId).then(() => {
+        byId('template-name').value = '';
+        byId('template-description').value = '';
+        els['template-dialog'].showModal();
+      }).catch(error => toast(error.message, true));
+      return;
+    }
+    byId('template-name').value = '';
+    byId('template-description').value = '';
+    els['template-dialog'].showModal();
   }
 
   async function openDocumentConversation(documentId) {
@@ -1216,8 +1500,15 @@
 
   async function configureFlow(docId) {
     state.flowDocumentId=docId;
-    const {data,error}=await client.from('document_participants').select('*').eq('document_id',docId).order('sequence');
-    if(error)throw error;
+    const [participantsResponse, documentResponse] = await Promise.all([
+      client.from('document_participants').select('*').eq('document_id',docId).order('sequence'),
+      client.from('documents').select('approval_routing,signature_routing').eq('id',docId).single()
+    ]);
+    if(participantsResponse.error)throw participantsResponse.error;
+    if(documentResponse.error)throw documentResponse.error;
+    const data = participantsResponse.data;
+    byId('flow-approval-routing').value = documentResponse.data.approval_routing || 'sequential';
+    byId('flow-signature-routing').value = documentResponse.data.signature_routing || 'sequential';
     els['flow-approvers-builder'].innerHTML='';els['flow-signers-builder'].innerHTML='';
     (data||[]).filter(item=>item.participant_role==='approver').forEach(item=>addOrderedParticipant(els['flow-approvers-builder'],'approver',item.user_id));
     (data||[]).filter(item=>item.participant_role==='signer').forEach(item=>addOrderedParticipant(els['flow-signers-builder'],'signer',item.user_id));
@@ -1228,9 +1519,17 @@
 
   async function saveFlow() {
     const mode=qsa('.ordered-row',els['flow-approvers-builder']).length?'approval_signature':'signature_only';
-    const items=readOrderedParticipants(els['flow-approvers-builder'],els['flow-signers-builder'],mode);
+    const approvalRouting = byId('flow-approval-routing').value;
+    const signatureRouting = byId('flow-signature-routing').value;
+    const items=readOrderedParticipants(els['flow-approvers-builder'],els['flow-signers-builder'],mode,approvalRouting,signatureRouting);
     if(!items.some(item=>item.participant_role==='signer'))throw new Error('Agrega al menos un firmante.');
-    await run(async()=>{const {error}=await client.rpc('set_document_participants',{p_document_id:state.flowDocumentId,p_items:items});if(error)throw error;els['flow-dialog'].close();await refreshData();await openDocument(state.flowDocumentId);},'Responsables actualizados.');
+    await run(async()=>{
+      const routing = await client.rpc('configure_document_workflow',{p_document_id:state.flowDocumentId,p_approval_routing:approvalRouting,p_signature_routing:signatureRouting});
+      if(routing.error)throw routing.error;
+      const {error}=await client.rpc('set_document_participants',{p_document_id:state.flowDocumentId,p_items:items});
+      if(error)throw error;
+      els['flow-dialog'].close();await refreshData();await openDocument(state.flowDocumentId);
+    },'Responsables actualizados.');
   }
 
   async function submitDocument(id) {
@@ -1618,6 +1917,44 @@
     if (!signing) return;
     const missing = signing.mine.filter(field => !String(signing.values[field.id] || '').trim());
     if (missing.length) throw new Error(`Falta colocar tu firma en ${missing.length} espacio(s).`);
+    byId('sign-confirm-password').value = '';
+    byId('sign-consent').checked = false;
+    state.pendingSignConfirmation = signing.doc.id;
+    els['sign-confirm-dialog'].showModal();
+    setTimeout(() => byId('sign-confirm-password').focus(), 80);
+  }
+
+  async function finalizeEvidence(documentId, silent = false) {
+    try {
+      const { data, error } = await client.functions.invoke('finalize-evidence', { body: { documentId } });
+      if (error) throw error;
+      if (!silent) toast(data?.alreadyReady ? 'Las evidencias ya estaban listas.' : 'Certificado y paquete de evidencias generados.');
+      return data;
+    } catch (error) {
+      console.error('No se pudo generar el paquete de evidencias:', error);
+      if (!silent) toast('La firma quedó registrada, pero el certificado no pudo generarse. Un administrador puede reintentarlo.', true);
+      return null;
+    }
+  }
+
+  async function confirmVisualSigning(event) {
+    event.preventDefault();
+    const password = byId('sign-confirm-password').value;
+    if (!password) throw new Error('Escribe tu contraseña actual.');
+    if (!byId('sign-consent').checked) throw new Error('Debes aceptar el consentimiento de firma electrónica.');
+    await run(async () => {
+      const { error } = await client.auth.signInWithPassword({ email: state.profile.email, password });
+      if (error) throw new Error('La contraseña no es correcta.');
+      els['sign-confirm-dialog'].close();
+      await executeVisualSigning();
+    });
+  }
+
+  async function executeVisualSigning() {
+    const signing = state.signing;
+    if (!signing) return;
+    const missing = signing.mine.filter(field => !String(signing.values[field.id] || '').trim());
+    if (missing.length) throw new Error(`Falta colocar tu firma en ${missing.length} espacio(s).`);
     await run(async () => {
       const signatureResponse = await fetch(signing.signatureUrl);
       if (!signatureResponse.ok) throw new Error('No se pudo cargar tu firma.');
@@ -1650,7 +1987,7 @@
       const fileName = `${signing.doc.title.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ -]/g, '').trim().replace(/\s+/g, '-')}-firmado-v${nextVersion}.pdf`;
       const upload = await client.storage.from('documents').upload(path, blob, { contentType: 'application/pdf', upsert: false });
       if (upload.error) throw upload.error;
-      const record = await client.rpc('record_document_signature_v2', {
+      const record = await client.rpc('record_document_signature_v3', {
         p_document_id: signing.doc.id,
         p_user_signature_id: signing.signature.id,
         p_file_path: path,
@@ -1658,12 +1995,21 @@
         p_file_hash: hash,
         p_size_bytes: blob.size,
         p_user_agent: navigator.userAgent.slice(0, 500),
-        p_values: signing.mine.map(field => ({ id: field.id, value: 'signature' }))
+        p_values: signing.mine.map(field => ({ id: field.id, value: 'signature' })),
+        p_base_version: Number(signing.doc.current_version),
+        p_consent_version: CONSENT_VERSION,
+        p_consent_text: CONSENT_TEXT
       });
-      if (record.error) throw record.error;
+      if (record.error) {
+        await client.storage.from('documents').remove([path]).catch(() => {});
+        throw record.error;
+      }
+      const completed = Boolean(record.data?.completed);
       els['sign-dialog'].close();
       state.signing = null;
+      state.pendingSignConfirmation = null;
       await refreshData();
+      if (completed) await finalizeEvidence(signing.doc.id, false);
     }, 'Tu firma se colocó correctamente.');
   }
 
@@ -1740,7 +2086,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard()]);
     renderAll();
   }
 
@@ -1858,6 +2204,7 @@
     bindPasswordHold(els['register-password-toggle'],byId('register-password'));
     bindPasswordHold(els['reset-password-toggle'],byId('reset-password'));
     bindPasswordHold(els['reset-password-confirm-toggle'],byId('reset-password-confirm'));
+    bindPasswordHold(els['sign-confirm-password-toggle'],byId('sign-confirm-password'));
     els['wizard-next'].addEventListener('click',()=>{try{validateWizardStep(state.wizardStep);setWizardStep(state.wizardStep+1);}catch(error){toast(error.message,true);}});
     els['wizard-back'].addEventListener('click',()=>setWizardStep(state.wizardStep-1));
     qsa('input[name="workflow-mode"]').forEach(input=>input.addEventListener('change',()=>setWorkflowMode(input.value)));
@@ -1871,6 +2218,10 @@
     els['flow-signers-builder'].addEventListener('click',event=>handleOrderedListClick(event,els['flow-signers-builder']));
     els['save-flow'].addEventListener('click', saveFlow);
     els['profile-form'].addEventListener('submit', updateProfile);
+    els['sign-confirm-form'].addEventListener('submit', confirmVisualSigning);
+    els['template-form'].addEventListener('submit', saveCurrentDocumentAsTemplate);
+    els['document-template'].addEventListener('change', applySelectedTemplate);
+    els['save-template-button'].addEventListener('click', () => openSaveTemplateDialog());
     ['profile-name','profile-department','profile-phone'].forEach(id => byId(id).addEventListener('input', saveProfileDraft));
     els['prepare-save'].addEventListener('click', () => savePreparedFields(false));
     els['prepare-save-submit'].addEventListener('click', () => savePreparedFields(true));
@@ -1902,6 +2253,8 @@
     });
     els['refresh-users'].addEventListener('click', async () => { await run(async () => { await loadProfiles(); renderAdminUsers(); }, 'Lista actualizada.'); });
     if (els['refresh-email-status']) els['refresh-email-status'].addEventListener('click', async () => { await run(async () => { await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Estado de correo actualizado.'); });
+    if (els['refresh-admin-dashboard']) els['refresh-admin-dashboard'].addEventListener('click', async () => { await run(async () => { await loadAdminDashboard(); renderAdminDashboard(); }, 'Indicadores actualizados.'); });
+    if (els['refresh-templates']) els['refresh-templates'].addEventListener('click', async () => { await run(async () => { await loadTemplates(); renderTemplateList(); }, 'Plantillas actualizadas.'); });
 
     document.addEventListener('click', async e => {
       const conversation = e.target.closest('[data-open-conversation]'); if (conversation) return openConversation(conversation.dataset.openConversation);
@@ -1927,6 +2280,15 @@
       const approve = e.target.closest('[data-approve-document]'); if (approve) return actOnDocument(approve.dataset.approveDocument, 'approve');
       const reject = e.target.closest('[data-reject-document]'); if (reject) return actOnDocument(reject.dataset.rejectDocument, 'reject');
       const sign = e.target.closest('[data-sign-document]'); if (sign) return signDocument(sign.dataset.signDocument);
+      const finalize = e.target.closest('[data-finalize-evidence]'); if (finalize) { await finalizeEvidence(finalize.dataset.finalizeEvidence, false); await refreshData(); return openDocument(finalize.dataset.finalizeEvidence); }
+      const pause = e.target.closest('[data-pause-document]'); if (pause) return pauseDocument(pause.dataset.pauseDocument);
+      const resume = e.target.closest('[data-resume-document]'); if (resume) return resumeDocument(resume.dataset.resumeDocument);
+      const cancel = e.target.closest('[data-cancel-document]'); if (cancel) return cancelDocument(cancel.dataset.cancelDocument);
+      const extend = e.target.closest('[data-extend-deadline]'); if (extend) return extendDeadline(extend.dataset.extendDeadline);
+      const correction = e.target.closest('[data-create-correction]'); if (correction) return createCorrection(correction.dataset.createCorrection);
+      const reassign = e.target.closest('[data-reassign-participant]'); if (reassign) return reassignParticipant(reassign.dataset.reassignParticipant, reassign.dataset.reassignDocument, reassign.dataset.reassignRole);
+      const saveTemplate = e.target.closest('[data-save-document-template]'); if (saveTemplate) return openSaveTemplateDialog(saveTemplate.dataset.saveDocumentTemplate);
+      const deleteTemplateButton = e.target.closest('[data-delete-template]'); if (deleteTemplateButton) return deleteTemplate(deleteTemplateButton.dataset.deleteTemplate);
       const revoke = e.target.closest('[data-revoke-signature]'); if (revoke) return revokeSignature(revoke.dataset.revokeSignature);
       const saveUser = e.target.closest('[data-save-user]'); if (saveUser) return updateAdminUser(saveUser.dataset.saveUser);
     });
