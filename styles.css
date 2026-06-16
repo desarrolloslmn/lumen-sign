@@ -220,24 +220,86 @@ table{min-width:720px}
 \n\n
 
 /* --------------------------------------------------------------------------
-   Lumen Sign v5.3 — barra lateral fija, scroll independiente y vista previa
+   Lumen Sign v5.3.1 — layout de escritorio sin superposición
+   La aplicación usa dos áreas con scroll independiente:
+   1) menú lateral; 2) contenido principal.
    -------------------------------------------------------------------------- */
 :root{--app-sidebar-width:clamp(238px,17vw,278px)}
 
+/* Evita que cualquier contenido ancho desplace toda la página debajo del menú. */
+#app-view.app-layout:not(.hidden){width:100%;max-width:100%;min-width:0}
+#app-view .content,
+#app-view .page-section,
+#app-view .panel,
+#app-view .panel>*{min-width:0;max-width:100%}
+#app-view .table-wrap{max-width:100%;overflow-x:auto;overflow-y:hidden}
+
 @media (min-width:901px){
-  .app-layout{display:block;min-height:100dvh;width:100%}
-  .sidebar{position:fixed;inset:0 auto 0 0;z-index:800;width:var(--app-sidebar-width);height:100vh;height:100dvh;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:max(1.25rem,env(safe-area-inset-bottom));overscroll-behavior-y:contain;scrollbar-gutter:stable;scrollbar-color:rgba(255,255,255,.28) transparent}
-  .sidebar::-webkit-scrollbar{width:8px}
-  .sidebar::-webkit-scrollbar-track{background:transparent}
-  .sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.24);border-radius:999px;border:2px solid transparent;background-clip:padding-box}
-  .sidebar-brand,.sidebar-reminder,.live-status,.sidebar-footer{flex:0 0 auto}
-  .sidebar #main-nav{flex:0 0 auto;min-height:max-content}
-  .sidebar-footer{margin-top:auto;padding-bottom:.35rem}
-  .content{width:calc(100% - var(--app-sidebar-width));max-width:none;min-height:100dvh;margin:0 0 0 var(--app-sidebar-width)}
+  #app-view.app-layout:not(.hidden){
+    display:grid;
+    grid-template-columns:var(--app-sidebar-width) minmax(0,1fr);
+    grid-template-rows:100dvh;
+    height:100dvh;
+    min-height:100dvh;
+    overflow:hidden;
+  }
+
+  #app-view .sidebar{
+    position:relative;
+    inset:auto;
+    z-index:20;
+    width:100%;
+    height:100dvh;
+    min-height:0;
+    overflow-y:auto;
+    overflow-x:hidden;
+    padding-bottom:max(1.25rem,env(safe-area-inset-bottom));
+    overscroll-behavior-y:contain;
+    scrollbar-gutter:stable;
+    scrollbar-width:thin;
+    scrollbar-color:rgba(255,255,255,.3) transparent;
+  }
+
+  #app-view .sidebar::-webkit-scrollbar{width:9px}
+  #app-view .sidebar::-webkit-scrollbar-track{background:transparent}
+  #app-view .sidebar::-webkit-scrollbar-thumb{
+    background:rgba(255,255,255,.28);
+    border-radius:999px;
+    border:2px solid transparent;
+    background-clip:padding-box;
+  }
+
+  #app-view .sidebar-brand,
+  #app-view .sidebar-reminder,
+  #app-view .live-status,
+  #app-view .sidebar-footer{flex:0 0 auto}
+
+  #app-view .sidebar #main-nav{flex:0 0 auto;min-height:max-content}
+  #app-view .sidebar-footer{margin-top:auto;padding-bottom:.35rem}
+
+  #app-view .content{
+    grid-column:2;
+    width:auto;
+    max-width:none;
+    height:100dvh;
+    min-height:0;
+    margin:0;
+    padding:1.6rem clamp(1rem,2.6vw,3rem) 4rem;
+    overflow-y:auto;
+    overflow-x:hidden;
+    overscroll-behavior:contain;
+    scrollbar-gutter:stable;
+  }
+
+  #app-view .topbar,
+  #app-view .page-section{width:100%;max-width:100%}
 }
 
-@media (min-width:901px) and (max-width:1180px){:root{--app-sidebar-width:230px}}
+@media (min-width:901px) and (max-width:1180px){
+  :root{--app-sidebar-width:230px}
+}
 
+/* Visor de aprobación. */
 .preview-dialog{width:min(1380px,calc(100vw - 2rem));height:min(94vh,1050px);max-height:94vh;overflow:hidden;padding:1rem}
 .preview-header{margin-bottom:.75rem}
 .preview-workspace{height:calc(100% - 92px);min-height:0}
@@ -245,13 +307,32 @@ table{min-width:720px}
 .preview-action{border-color:#9dc2e7!important;background:#eef6ff!important}
 
 @media (max-width:900px){
-  .content{width:100%;margin-left:0}
+  #app-view.app-layout:not(.hidden){display:block;width:100%;height:auto;min-height:100dvh;overflow:visible}
+  #app-view .sidebar{
+    position:fixed;
+    inset:0 auto 0 0;
+    z-index:1200;
+    width:min(326px,86vw);
+    height:100vh;
+    height:100dvh;
+    min-height:0;
+    overflow-y:auto;
+    overflow-x:hidden;
+    transform:translateX(-105%);
+    transition:transform .22s ease;
+    box-shadow:18px 0 50px rgba(4,18,35,.28);
+    padding:1rem;
+  }
+  #app-view .sidebar.open{transform:translateX(0)}
+  #app-view .content{width:100%;max-width:none;height:auto;min-height:100dvh;margin:0;padding:0 1rem 3rem;overflow:visible}
+
   .preview-dialog{width:100vw;max-width:100vw;height:100vh;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0;padding:.75rem}
   .preview-header{padding-right:2.8rem}
   .preview-workspace{height:calc(100dvh - 150px)}
 }
 
 @media (max-width:700px){
+  #app-view .content{padding-inline:.7rem}
   .preview-header{display:block}
   .preview-header .button-row{margin-top:.75rem}
   .preview-header .button-row button{width:100%}
