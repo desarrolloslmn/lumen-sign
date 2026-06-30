@@ -26,6 +26,8 @@
     profile: null,
     profiles: [],
     documents: [],
+    myParticipantRows: [],
+    documentHistory: [],
     tasks: [],
     signatures: [],
     appliedSignatures: [],
@@ -78,7 +80,7 @@
       'auth-view','app-view','login-form','register-form','forgot-password','logout-button','admin-nav',
       'reset-panel','reset-request-form','reset-confirm-form','reset-email','reset-sent-note','reset-panel-description','reset-password','reset-password-confirm','reset-back-login','reset-password-toggle','reset-password-confirm-toggle',
       'login-password-toggle','register-password-toggle','sidebar-user','user-status-pill','pending-banner',
-      'next-action-card','stats-grid','recent-documents','documents-table','document-search','document-status-filter',
+      'next-action-card','stats-grid','recent-documents','documents-table','document-search','document-status-filter','history-search','history-action-filter','history-summary','history-table',
       'new-document-form','wizard-steps','wizard-back','wizard-next','wizard-create','wizard-message','wizard-review',
       'approval-stage','approvers-builder','signers-builder','add-approver','add-signer',
       'tasks-table','profile-onboarding','profile-form','signature-canvas','clear-signature','save-signature','signature-list','signed-history-table',
@@ -347,6 +349,53 @@
     state.documents = data || [];
   }
 
+  async function loadMyParticipation() {
+    if (!isActive()) { state.myParticipantRows = []; return; }
+    const { data, error } = await client.from('document_participants')
+      .select('id,document_id,participant_role,action_status,acted_at,sequence')
+      .eq('user_id', state.session.user.id)
+      .order('sequence', { ascending: true });
+    if (error) throw error;
+    state.myParticipantRows = data || [];
+  }
+
+  async function loadDocumentHistory() {
+    if (!isActive()) { state.documentHistory = []; return; }
+    const { data, error } = await client.from('audit_events')
+      .select('id,document_id,actor_id,action,metadata,created_at,documents(id,title,status,owner_id)')
+      .order('created_at', { ascending: false })
+      .limit(300);
+    if (error) throw error;
+    state.documentHistory = (data || []).filter(item => item.documents);
+  }
+
+  function myDocumentIds() {
+    const ids = new Set();
+    state.documents.forEach(document => {
+      if (document.owner_id === state.session?.user?.id) ids.add(document.id);
+    });
+    state.myParticipantRows.forEach(row => ids.add(row.document_id));
+    return ids;
+  }
+
+  function myDocuments() {
+    const ids = myDocumentIds();
+    return state.documents.filter(document => ids.has(document.id));
+  }
+
+  function myDocumentRoles(documentId) {
+    const roles = [];
+    const doc = state.documents.find(item => item.id === documentId);
+    if (doc?.owner_id === state.session?.user?.id) roles.push('Propietario');
+    state.myParticipantRows
+      .filter(row => row.document_id === documentId)
+      .forEach(row => {
+        const label = participantRoleLabels[row.participant_role] || row.participant_role;
+        if (!roles.includes(label)) roles.push(label);
+      });
+    return roles;
+  }
+
   async function loadTasks() {
     if (!isActive()) { state.tasks = []; return; }
     const { data, error } = await client.from('document_participants')
@@ -457,6 +506,7 @@
 
     renderDashboard();
     renderDocuments();
+    renderDocumentHistory();
     renderTasks();
     renderNotifications();
     renderConversations();
@@ -620,6 +670,7 @@
   function renderAll() {
     renderDashboard();
     renderDocuments();
+    renderDocumentHistory();
     renderTasks();
     renderSignatures();
     renderAppliedSignatures();
@@ -631,11 +682,12 @@
   }
 
   function renderDashboard() {
+    const myDocs = myDocuments();
     const counts = {
-      total: state.documents.length,
-      draft: state.documents.filter(document => document.status === 'draft').length,
+      total: myDocs.length,
+      draft: myDocs.filter(document => document.status === 'draft').length,
       pending: state.tasks.filter(task => task.is_actionable).length,
-      completed: state.documents.filter(document => document.status === 'completed').length
+      completed: myDocs.filter(document => document.status === 'completed').length
     };
     els['stats-grid'].innerHTML = [
       ['Documentos', counts.total, '▤'], ['Borradores', counts.draft, '○'],
@@ -658,7 +710,7 @@
       next = { title:'No tienes tareas pendientes', text:'Cuando un documento llegue a tu turno aparecerá aquí.', label:'Ver documentos', action:'documents', neutral:true };
     }
     els['next-action-card'].innerHTML = `<div class="next-action ${next.neutral?'neutral':''}"><div><p class="eyebrow ${next.neutral?'dark':''}">Qué sigue</p><h2>${escapeHtml(next.title)}</h2><p>${escapeHtml(next.text)}</p></div><button class="primary" ${next.document ? `data-${next.prepare?'prepare':'open'}-document="${next.document}"` : `data-go-section="${next.action}"`}>${escapeHtml(next.label)}</button></div>`;
-    const recent = state.documents.slice(0, 6);
+    const recent = myDocs.slice(0, 6);
     els['recent-documents'].innerHTML = recent.length ? documentTable(recent, false) : '<div class="empty">Aún no hay documentos.</div>';
   }
 
@@ -676,7 +728,7 @@
   function filteredDocuments() {
     const text = (els['document-search'].value || '').trim().toLowerCase();
     const status = els['document-status-filter'].value;
-    return state.documents.filter(d => (!text || `${d.title} ${d.description || ''}`.toLowerCase().includes(text)) && (!status || d.status === status));
+    return myDocuments().filter(d => (!text || `${d.title} ${d.description || ''}`.toLowerCase().includes(text)) && (!status || d.status === status));
   }
 
   function renderDocuments() {
@@ -685,14 +737,36 @@
   }
 
   function documentTable(docs, includeCategory = true) {
-    return `<div class="table-wrap"><table><thead><tr><th>Título</th>${includeCategory ? '<th>Tipo</th>' : ''}<th>Estado</th><th>Versión</th><th>Actualización</th><th></th></tr></thead><tbody>
+    return `<div class="table-wrap"><table><thead><tr><th>Título</th>${includeCategory ? '<th>Tipo</th>' : ''}<th>Mi participación</th><th>Estado</th><th>Versión</th><th>Actualización</th><th></th></tr></thead><tbody>
       ${docs.map(d => `<tr>
         <td><strong>${escapeHtml(d.title)}</strong><br><span class="muted small">${escapeHtml(d.active_file_name || 'Sin archivo')}</span></td>
         ${includeCategory ? `<td>${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[d.category] || d.category)}</td>` : ''}
+        <td>${myDocumentRoles(d.id).map(role => `<span class="pill soft">${escapeHtml(role)}</span>`).join(' ') || '<span class="muted small">Consulta</span>'}</td>
         <td>${pill(d.status)}</td><td>v${d.current_version}</td><td>${fmtDate(d.updated_at)}</td>
         <td><button class="secondary" data-open-document="${d.id}">Ver</button></td>
       </tr>`).join('')}
     </tbody></table></div>`;
+  }
+
+  function filteredHistoryEvents() {
+    const ids = myDocumentIds();
+    const text = (els['history-search']?.value || '').trim().toLowerCase();
+    const action = els['history-action-filter']?.value || '';
+    return state.documentHistory.filter(event => {
+      if (!ids.has(event.document_id)) return false;
+      const haystack = `${event.documents?.title || ''} ${eventLabel(event.action)} ${profileName(event.actor_id)} ${event.metadata?.comment || ''}`.toLowerCase();
+      return (!text || haystack.includes(text)) && (!action || event.action === action);
+    });
+  }
+
+  function renderDocumentHistory() {
+    if (!els['history-table']) return;
+    const docs = myDocuments();
+    const events = filteredHistoryEvents();
+    const completed = docs.filter(document => document.status === 'completed').length;
+    const pending = state.tasks.filter(task => task.is_actionable).length;
+    els['history-summary'].innerHTML = `<div class="stats-grid compact"><article class="stat"><span class="stat-icon">▤</span><span class="muted">Mis documentos</span><strong>${docs.length}</strong></article><article class="stat"><span class="stat-icon">✓</span><span class="muted">Completados</span><strong>${completed}</strong></article><article class="stat"><span class="stat-icon">!</span><span class="muted">Tareas activas</span><strong>${pending}</strong></article><article class="stat"><span class="stat-icon">◷</span><span class="muted">Eventos visibles</span><strong>${events.length}</strong></article></div>`;
+    els['history-table'].innerHTML = events.length ? `<div class="timeline document-history-list">${events.map(event => `<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p><button class="link-button" type="button" data-open-document="${event.document_id}">${escapeHtml(event.documents?.title || 'Documento')}</button> · ${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment ? `<p>${escapeHtml(event.metadata.comment)}</p>` : ''}</div>`).join('')}</div>` : '<div class="empty">Aún no hay historial visible para tus documentos.</div>';
   }
 
   function renderTasks() {
@@ -934,12 +1008,12 @@
   }
 
   function navigate(section) {
-    if (!isActive() && ['new-document','tasks','documents','dashboard','messages','notifications'].includes(section)) section = 'profile';
+    if (!isActive() && ['new-document','tasks','documents','history','dashboard','messages','notifications'].includes(section)) section = 'profile';
     qsa('.page-section').forEach(s => s.classList.add('hidden'));
     byId(`section-${section}`).classList.remove('hidden');
     qsa('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.section === section));
     const titles = {
-      dashboard: ['Inicio', 'Lo que requiere tu atención'], documents: ['Documentos', 'Consulta el estado de cada expediente'],
+      dashboard: ['Inicio', 'Lo que requiere tu atención'], documents: ['Mis documentos', 'Expedientes donde participas o que tú creaste'], history: ['Historial', 'Movimientos de tus expedientes'],
       'new-document': ['Crear documento', 'Asistente paso a paso'], tasks: ['Mis tareas', 'Solo se habilita la acción de tu turno'],
       messages: ['Mensajes', 'Conversaciones directas y grupos de trabajo'], notifications: ['Notificaciones', 'Avisos de tareas y documentos'],
       profile: ['Perfil y firma', 'Identidad y firma registrada'], admin: ['Usuarios', 'Activa cuentas, asigna funciones y audita conversaciones']
@@ -951,6 +1025,7 @@
     if (section === 'new-document') setWizardStep(state.wizardStep || 1);
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
     if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
+    if (section === 'history') renderDocumentHistory();
     if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadAdminDashboard(), loadTemplates()]).then(() => { renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); }).catch(error => toast(error.message, true)); }
   }
 
@@ -2086,7 +2161,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard()]);
     renderAll();
   }
 
@@ -2199,6 +2274,8 @@
     window.addEventListener('resize', () => { if (window.matchMedia('(min-width: 901px)').matches) closeMobileMenu(); });
     els['document-search'].addEventListener('input', renderDocuments);
     els['document-status-filter'].addEventListener('change', renderDocuments);
+    els['history-search']?.addEventListener('input', renderDocumentHistory);
+    els['history-action-filter']?.addEventListener('change', renderDocumentHistory);
     els['new-document-form'].addEventListener('submit', createDocument);
     bindPasswordHold(els['login-password-toggle'],byId('login-password'));
     bindPasswordHold(els['register-password-toggle'],byId('register-password'));

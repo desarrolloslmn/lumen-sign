@@ -114,7 +114,8 @@
       <nav id="main-nav">
         <button data-section="dashboard" class="nav-item active"><span>⌂</span>Inicio</button>
         <button data-section="tasks" class="nav-item"><span>✓</span>Mis tareas <b id="task-pending-badge" class="nav-badge task-badge-nav hidden">0</b></button>
-        <button data-section="documents" class="nav-item"><span>▤</span>Documentos</button>
+        <button data-section="documents" class="nav-item"><span>▤</span>Mis documentos</button>
+        <button data-section="history" class="nav-item"><span>◷</span>Historial</button>
         <button data-section="messages" class="nav-item"><span>✉</span>Mensajes <b id="message-unread-badge" class="nav-badge hidden">0</b></button>
         <button data-section="notifications" class="nav-item"><span>🔔</span>Notificaciones <b id="notification-unread-badge" class="nav-badge hidden">0</b></button>
         <button data-section="new-document" class="nav-item"><span>＋</span>Crear documento</button>
@@ -175,7 +176,7 @@
       <section id="section-documents" class="page-section hidden">
         <div class="panel">
           <div class="panel-header wrap">
-            <div><p class="eyebrow dark">Expedientes</p><h2>Todos tus documentos</h2></div>
+            <div><p class="eyebrow dark">Expedientes</p><h2>Mis documentos</h2><p class="muted">Aquí aparece solo lo que creaste o donde participas como aprobador, firmante, editor o consulta.</p></div>
             <div class="toolbar">
               <input id="document-search" type="search" placeholder="Buscar por título" />
               <select id="document-status-filter">
@@ -190,6 +191,32 @@
             </div>
           </div>
           <div id="documents-table"></div>
+        </div>
+      </section>
+
+      <section id="section-history" class="page-section hidden">
+        <div class="panel">
+          <div class="panel-header wrap">
+            <div><p class="eyebrow dark">Historial</p><h2>Mi historial de documentos</h2><p class="muted">Consulta los movimientos de los expedientes donde participas o que tú creaste.</p></div>
+            <div class="toolbar">
+              <input id="history-search" type="search" placeholder="Buscar por documento o acción" />
+              <select id="history-action-filter">
+                <option value="">Todas las acciones</option>
+                <option value="document_created">Documento creado</option>
+                <option value="document_submitted">Documento enviado</option>
+                <option value="document_approved">Documento aprobado</option>
+                <option value="document_rejected">Documento rechazado</option>
+                <option value="document_signed">Documento firmado</option>
+                <option value="document_completed">Documento completado</option>
+                <option value="document_paused">Proceso pausado</option>
+                <option value="document_resumed">Proceso reanudado</option>
+                <option value="deadline_extended">Fecha límite extendida</option>
+                <option value="participant_reassigned">Responsable reasignado</option>
+              </select>
+            </div>
+          </div>
+          <div id="history-summary" class="history-summary"></div>
+          <div id="history-table"></div>
         </div>
       </section>
 
