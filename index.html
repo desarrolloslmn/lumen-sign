@@ -28,7 +28,6 @@
       <div class="auth-brand-mobile"><span class="brand-mark small-mark">L</span><strong>Lumen Sign</strong></div>
       <div class="tabs" role="tablist" aria-label="Acceso">
         <button class="tab active" data-auth-tab="login" type="button">Ingresar</button>
-        <button class="tab" data-auth-tab="register" type="button">Crear cuenta</button>
       </div>
 
       <form id="login-form" class="stack">
@@ -50,27 +49,13 @@
         <button id="forgot-password" class="link-button" type="button">Olvidé mi contraseña</button>
       </form>
 
-      <form id="register-form" class="stack hidden">
+      <section id="access-controlled-notice" class="security-access-box">
+        <div class="security-access-icon">🔒</div>
         <div>
-          <h2>Crear cuenta</h2>
-          <p class="muted">Confirma tu correo y un administrador asignará tu función.</p>
+          <h3>Acceso controlado</h3>
+          <p>Por seguridad, el registro público está desactivado. Las cuentas de Lumen Sign solo pueden ser creadas y activadas por un superadministrador autorizado.</p>
         </div>
-        <label>Nombre completo
-          <input id="register-name" type="text" autocomplete="name" required maxlength="120" />
-        </label>
-        <label>Correo
-          <input id="register-email" type="email" autocomplete="email" required />
-        </label>
-        <label>Contraseña
-          <span class="password-control">
-            <input id="register-password" type="password" autocomplete="new-password" required minlength="10" />
-            <button id="register-password-toggle" class="password-hold" type="button" aria-label="Mantén presionado para ver la contraseña" title="Mantén presionado para ver">👁</button>
-          </span>
-          <span class="hint">Mínimo 10 caracteres, mayúscula, minúscula, número y símbolo.</span>
-        </label>
-        <button class="primary large" type="submit">Crear mi cuenta</button>
-        <p class="muted small">Por seguridad, las cuentas nuevas no reciben permisos hasta que un administrador las active.</p><p class="corporate-notice">Las conversaciones de Lumen Sign son comunicaciones corporativas y pueden ser auditadas por administradores autorizados conforme al aviso de privacidad.</p>
-      </form>
+      </section>
 
       <section id="reset-panel" class="stack hidden">
         <div>

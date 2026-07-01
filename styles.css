@@ -367,3 +367,36 @@ table{min-width:720px}
 .history-summary{margin-bottom:1rem}.stats-grid.compact{grid-template-columns:repeat(4,minmax(130px,1fr));margin-bottom:1rem}.document-history-list .timeline-item{background:#fff}.link-button{cursor:pointer;text-align:left}.link-button:hover{text-decoration:underline}
 @media(max-width:900px){.stats-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.stats-grid.compact{grid-template-columns:1fr}}
+
+
+/* v7.0 Seguridad Paso 1: registro público cerrado */
+.security-access-box{
+  display:flex;
+  gap:14px;
+  align-items:flex-start;
+  margin-top:18px;
+  padding:16px;
+  border:1px solid rgba(4,44,85,.16);
+  border-radius:18px;
+  background:linear-gradient(180deg, rgba(7,92,164,.08), rgba(7,92,164,.03));
+  color:#14324d;
+}
+.security-access-box h3{
+  margin:0 0 6px;
+  font-size:1rem;
+}
+.security-access-box p{
+  margin:0;
+  font-size:.88rem;
+  line-height:1.45;
+}
+.security-access-icon{
+  width:34px;
+  height:34px;
+  display:grid;
+  place-items:center;
+  border-radius:12px;
+  background:#fff;
+  box-shadow:0 8px 24px rgba(10,37,64,.12);
+  flex:0 0 auto;
+}

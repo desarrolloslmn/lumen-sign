@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '6.0.0';
+  const APP_VERSION = '7.0.0-seguridad-paso1';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
@@ -208,15 +208,15 @@
     els['reset-panel'].classList.add('hidden');
     qsa('[data-auth-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.authTab === tab));
     els['login-form'].classList.toggle('hidden', tab !== 'login');
-    els['register-form'].classList.toggle('hidden', tab !== 'register');
-    document.querySelector('.tabs').classList.remove('hidden');
+    if (els['register-form']) els['register-form'].classList.toggle('hidden', tab !== 'register');
+    document.querySelector('.tabs')?.classList.remove('hidden');
   }
 
   function showResetPanel(email = '', mode = 'request') {
     qsa('[data-auth-tab]').forEach(btn => btn.classList.remove('active'));
     els['login-form'].classList.add('hidden');
-    els['register-form'].classList.add('hidden');
-    document.querySelector('.tabs').classList.add('hidden');
+    if (els['register-form']) els['register-form'].classList.add('hidden');
+    document.querySelector('.tabs')?.classList.add('hidden');
     els['reset-panel'].classList.remove('hidden');
 
     const isConfirm = mode === 'confirm';
@@ -2242,20 +2242,13 @@
         if (error) throw error;
       });
     });
-    els['register-form'].addEventListener('submit', async e => {
-      e.preventDefault();
-      await run(async () => {
-        const redirectTo = `${location.origin}${location.pathname}`;
-        const { data, error } = await client.auth.signUp({
-          email: byId('register-email').value.trim(), password: byId('register-password').value,
-          options: { data: { full_name: byId('register-name').value.trim() }, emailRedirectTo: redirectTo }
-        });
-        if (error) throw error;
-        e.target.reset();
-        toast(data.session ? 'Cuenta creada. Un administrador debe activarla.' : 'Revisa tu correo para confirmar la cuenta.');
+    if (els['register-form']) {
+      els['register-form'].addEventListener('submit', e => {
+        e.preventDefault();
+        toast('El registro público está desactivado. Solicita el alta a un superadministrador.');
         switchAuthTab('login');
       });
-    });
+    }
     els['forgot-password'].addEventListener('click', () => {
       showResetPanel(byId('login-email').value.trim());
     });
