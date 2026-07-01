@@ -121,7 +121,7 @@
       </div>
       <div class="sidebar-footer">
         <div id="sidebar-user" class="small"></div>
-        <div class="app-version">Lumen Sign 6.0 · Profesional</div>
+        <div class="app-version">Lumen Sign 7.1 · Seguridad</div>
         <button id="logout-button" class="secondary full" type="button">Cerrar sesión</button>
       </div>
     </aside>
@@ -427,6 +427,49 @@
       </section>
     </section>
   </div>
+
+
+  <dialog id="force-password-dialog" class="dialog force-password-dialog">
+    <div class="dialog-heading">
+      <p class="eyebrow dark">Seguridad obligatoria</p>
+      <h2>Cambia tu contraseña temporal</h2>
+      <p class="muted">Antes de usar Lumen Sign debes reemplazar la contraseña temporal por una contraseña privada. Esta ventana no se puede omitir.</p>
+    </div>
+    <form id="force-password-form" class="stack">
+      <label>Contraseña temporal actual
+        <span class="password-control">
+          <input id="force-current-password" type="password" autocomplete="current-password" required minlength="10" />
+          <button id="force-current-password-toggle" class="password-hold" type="button" aria-label="Mantén presionado para ver la contraseña">👁</button>
+        </span>
+      </label>
+      <label>Contraseña nueva
+        <span class="password-control">
+          <input id="force-new-password" type="password" autocomplete="new-password" required minlength="12" />
+          <button id="force-new-password-toggle" class="password-hold" type="button" aria-label="Mantén presionado para ver la contraseña">👁</button>
+        </span>
+      </label>
+      <label>Confirmar contraseña nueva
+        <span class="password-control">
+          <input id="force-confirm-password" type="password" autocomplete="new-password" required minlength="12" />
+          <button id="force-confirm-password-toggle" class="password-hold" type="button" aria-label="Mantén presionado para ver la contraseña">👁</button>
+        </span>
+      </label>
+      <div class="password-policy-box">
+        <strong>La contraseña nueva debe incluir:</strong>
+        <ul>
+          <li>Mínimo 12 caracteres.</li>
+          <li>Una mayúscula y una minúscula.</li>
+          <li>Un número.</li>
+          <li>Un símbolo.</li>
+          <li>No debe ser igual a la contraseña temporal.</li>
+        </ul>
+      </div>
+      <div class="button-row right">
+        <button id="force-password-logout" class="secondary" type="button">Cerrar sesión</button>
+        <button class="primary" type="submit">Guardar contraseña nueva</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="document-dialog" class="dialog document-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>

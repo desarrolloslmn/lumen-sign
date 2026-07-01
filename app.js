@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '7.0.0-seguridad-paso1';
+  const APP_VERSION = '7.1.0-seguridad-paso2';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
@@ -41,7 +41,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: []
+    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false
   };
 
   const els = {};
@@ -96,7 +96,8 @@
       'preview-dialog','preview-title','preview-pages','preview-page-number','preview-page-count','preview-prev-page','preview-next-page','preview-zoom-in','preview-zoom-out','preview-zoom-label','preview-back-document','preview-download',
       'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list',
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
-      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-consent'
+      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-consent',
+      'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
   }
@@ -245,12 +246,14 @@
       showAuth(); return;
     }
     const userId = session.user.id;
-    if (!force && state.loadedUserId === userId && state.profile) { showApp(); return; }
+    if (!force && state.loadedUserId === userId && state.profile) { showApp(); if (state.profile?.must_change_password) showForcePasswordDialog(); return; }
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
     state.sessionLoadPromise = (async () => {
       await loadProfile(); showApp(); configureAppForProfile();
       await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard()]);
-      renderAll(); startLiveSync(); state.loadedUserId = userId;
+      renderAll();
+      if (state.profile?.must_change_password) showForcePasswordDialog();
+      startLiveSync(); state.loadedUserId = userId;
     })();
     try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
   }
@@ -2177,6 +2180,81 @@
   }
 
 
+  function passwordMeetsSecurityPolicy(password) {
+    const value = String(password || '');
+    return value.length >= 12
+      && /[a-z]/.test(value)
+      && /[A-Z]/.test(value)
+      && /\d/.test(value)
+      && /[^A-Za-z0-9]/.test(value);
+  }
+
+  function showForcePasswordDialog() {
+    if (!els['force-password-dialog'] || !state.profile?.must_change_password) return;
+    state.forcePasswordChangeActive = true;
+    document.body.classList.add('password-change-required');
+    if (!els['force-password-dialog'].open) {
+      els['force-password-dialog'].showModal();
+      setTimeout(() => byId('force-current-password')?.focus(), 80);
+    }
+  }
+
+  function clearForcePasswordDialog() {
+    state.forcePasswordChangeActive = false;
+    document.body.classList.remove('password-change-required');
+    byId('force-password-form')?.reset();
+    if (els['force-password-dialog']?.open) els['force-password-dialog'].close();
+  }
+
+  async function markPasswordChanged() {
+    const { error } = await client.rpc('mark_password_changed');
+    if (!error) return;
+
+    console.warn('No se pudo ejecutar mark_password_changed; se intenta actualización directa del perfil.', error);
+    const { error: updateError } = await client.from('profiles')
+      .update({
+        must_change_password: false,
+        password_changed_at: new Date().toISOString(),
+        password_policy_version: 'LS-2026-V7.1'
+      })
+      .eq('id', state.session.user.id);
+    if (updateError) throw updateError;
+  }
+
+  async function completeForcedPasswordChange(event) {
+    event.preventDefault();
+
+    if (!state.session?.user?.email) throw new Error('Tu sesión no está lista. Cierra sesión e ingresa otra vez.');
+
+    const currentPassword = byId('force-current-password').value;
+    const newPassword = byId('force-new-password').value;
+    const confirmation = byId('force-confirm-password').value;
+
+    if (!currentPassword) throw new Error('Escribe tu contraseña temporal actual.');
+    if (!passwordMeetsSecurityPolicy(newPassword)) {
+      throw new Error('La contraseña nueva debe tener mínimo 12 caracteres, mayúscula, minúscula, número y símbolo.');
+    }
+    if (newPassword !== confirmation) throw new Error('La confirmación no coincide con la contraseña nueva.');
+    if (newPassword === currentPassword) throw new Error('La contraseña nueva no puede ser igual a la temporal.');
+
+    await run(async () => {
+      const { error: reauthError } = await client.auth.signInWithPassword({
+        email: state.session.user.email,
+        password: currentPassword
+      });
+      if (reauthError) throw new Error('La contraseña temporal actual no es correcta.');
+
+      const { error: updateError } = await client.auth.updateUser({ password: newPassword });
+      if (updateError) throw updateError;
+
+      await markPasswordChanged();
+      await loadProfile();
+      configureAppForProfile(true);
+      clearForcePasswordDialog();
+    }, 'Contraseña actualizada. Ya puedes usar Lumen Sign.');
+  }
+
+
   async function sendPasswordResetLink(email) {
     const cleanEmail = String(email || '').trim().toLowerCase();
     if (!cleanEmail) throw new Error('Escribe tu correo.');
@@ -2258,6 +2336,9 @@
       await run(() => sendPasswordResetLink(byId('reset-email').value));
     });
     els['reset-confirm-form'].addEventListener('submit', completePasswordReset);
+    els['force-password-form']?.addEventListener('submit', completeForcedPasswordChange);
+    els['force-password-dialog']?.addEventListener('cancel', event => { if (state.profile?.must_change_password) event.preventDefault(); });
+    els['force-password-logout']?.addEventListener('click', async () => { clearProfileDraft(); clearForcePasswordDialog(); await client.auth.signOut(); });
     els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); await client.auth.signOut(); });
     els['main-nav'].addEventListener('click', e => { const b = e.target.closest('[data-section]'); if (b && !b.disabled) navigate(b.dataset.section); });
     els['menu-button'].setAttribute('aria-expanded', 'false');
@@ -2273,6 +2354,9 @@
     bindPasswordHold(els['login-password-toggle'],byId('login-password'));
     bindPasswordHold(els['register-password-toggle'],byId('register-password'));
     bindPasswordHold(els['reset-password-toggle'],byId('reset-password'));
+    bindPasswordHold(els['force-current-password-toggle'],byId('force-current-password'));
+    bindPasswordHold(els['force-new-password-toggle'],byId('force-new-password'));
+    bindPasswordHold(els['force-confirm-password-toggle'],byId('force-confirm-password'));
     bindPasswordHold(els['reset-password-confirm-toggle'],byId('reset-password-confirm'));
     bindPasswordHold(els['sign-confirm-password-toggle'],byId('sign-confirm-password'));
     els['wizard-next'].addEventListener('click',()=>{try{validateWizardStep(state.wizardStep);setWizardStep(state.wizardStep+1);}catch(error){toast(error.message,true);}});
