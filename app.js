@@ -2244,7 +2244,10 @@
       });
       if (reauthError) throw new Error('La contraseña temporal actual no es correcta.');
 
-      const { error: updateError } = await client.auth.updateUser({ password: newPassword });
+      const { error: updateError } = await client.auth.updateUser({
+        password: newPassword,
+        current_password: currentPassword
+      });
       if (updateError) throw updateError;
 
       await markPasswordChanged();
