@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '7.2.0-seguridad-paso3-mfa';
+  const APP_VERSION = '7.2.1-seguridad-mfa-error-visible';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
@@ -98,7 +98,7 @@
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
       'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-consent',
       'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
-      'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-logout','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-logout','mfa-verify-retry'
+      'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
   }
@@ -108,6 +108,93 @@
     els.toast.className = `toast show${error ? ' error' : ''}`;
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => els.toast.className = 'toast', 3800);
+  }
+
+
+  function mfaInputId(mode) {
+    return mode === 'setup' ? 'mfa-setup-code' : 'mfa-verify-code';
+  }
+
+  function mfaErrorId(mode) {
+    return mode === 'setup' ? 'mfa-setup-error' : 'mfa-verify-error';
+  }
+
+  function ensureMfaErrorElement(mode) {
+    const id = mfaErrorId(mode);
+    let box = byId(id);
+    if (box) {
+      els[id] = box;
+      return box;
+    }
+
+    const formId = mode === 'setup' ? 'mfa-setup-form' : 'mfa-verify-form';
+    const input = byId(mfaInputId(mode));
+    const form = byId(formId);
+    if (!form) return null;
+
+    box = document.createElement('div');
+    box.id = id;
+    box.className = 'mfa-inline-error hidden';
+    box.setAttribute('role', 'alert');
+    box.setAttribute('aria-live', 'assertive');
+
+    const label = input?.closest('label');
+    if (label) label.insertAdjacentElement('afterend', box);
+    else form.prepend(box);
+    els[id] = box;
+    return box;
+  }
+
+  function clearMfaInlineError(mode) {
+    const id = mfaErrorId(mode);
+    const box = byId(id);
+    if (box) {
+      box.textContent = '';
+      box.classList.add('hidden');
+    }
+    const input = byId(mfaInputId(mode));
+    if (input) {
+      input.classList.remove('input-error');
+      input.removeAttribute('aria-invalid');
+      input.removeAttribute('aria-describedby');
+    }
+  }
+
+  function showMfaInlineError(mode, message) {
+    const id = mfaErrorId(mode);
+    const box = ensureMfaErrorElement(mode);
+    const input = byId(mfaInputId(mode));
+    if (box) {
+      box.textContent = message;
+      box.classList.remove('hidden');
+    }
+    if (input) {
+      input.value = '';
+      input.classList.add('input-error');
+      input.setAttribute('aria-invalid', 'true');
+      input.setAttribute('aria-describedby', id);
+      setTimeout(() => input.focus(), 60);
+    }
+  }
+
+  function mfaFriendlyError(error) {
+    const raw = String(error?.message || error || '').trim();
+    const text = raw.toLowerCase();
+    if (
+      !raw ||
+      error?.status === 400 ||
+      text.includes('invalid') ||
+      text.includes('expired') ||
+      text.includes('challenge') ||
+      text.includes('factor') ||
+      text.includes('verification') ||
+      text.includes('code') ||
+      text.includes('otp') ||
+      text.includes('totp')
+    ) {
+      return 'Código incorrecto o vencido. Abre tu app autenticadora y escribe el código actual de 6 dígitos.';
+    }
+    return raw;
   }
 
   function escapeHtml(value = '') {
@@ -2288,7 +2375,9 @@
       els['mfa-qr'].classList.toggle('hidden', !qr);
     }
     if (els['mfa-secret']) els['mfa-secret'].textContent = enrollment?.totp?.secret || 'No disponible';
+    ensureMfaErrorElement('setup');
     byId('mfa-setup-form')?.reset();
+    clearMfaInlineError('setup');
     if (els['mfa-verify-dialog']?.open) els['mfa-verify-dialog'].close();
     if (!els['mfa-setup-dialog']?.open) els['mfa-setup-dialog']?.showModal();
     setTimeout(() => byId('mfa-setup-code')?.focus(), 120);
@@ -2297,7 +2386,9 @@
   function showMfaVerifyDialog() {
     state.mfaRequiredActive = true;
     document.body.classList.add('mfa-required');
+    ensureMfaErrorElement('verify');
     byId('mfa-verify-form')?.reset();
+    clearMfaInlineError('verify');
     if (els['mfa-setup-dialog']?.open) els['mfa-setup-dialog'].close();
     if (!els['mfa-verify-dialog']?.open) els['mfa-verify-dialog']?.showModal();
     setTimeout(() => byId('mfa-verify-code')?.focus(), 120);
@@ -2309,6 +2400,8 @@
     document.body.classList.remove('mfa-required');
     byId('mfa-setup-form')?.reset();
     byId('mfa-verify-form')?.reset();
+    clearMfaInlineError('setup');
+    clearMfaInlineError('verify');
     if (els['mfa-setup-dialog']?.open) els['mfa-setup-dialog'].close();
     if (els['mfa-verify-dialog']?.open) els['mfa-verify-dialog'].close();
   }
@@ -2323,11 +2416,20 @@
 
   async function completeMfaEnrollment(event) {
     event.preventDefault();
-    const code = normalizeMfaCode(byId('mfa-setup-code')?.value);
-    if (!/^\d{6}$/.test(code)) throw new Error('Escribe el código de 6 dígitos de tu app autenticadora.');
-    if (!state.mfa?.factorId) throw new Error('No hay un factor MFA en proceso. Cierra sesión e intenta de nuevo.');
+    clearMfaInlineError('setup');
 
-    await run(async () => {
+    const code = normalizeMfaCode(byId('mfa-setup-code')?.value);
+    if (!/^\d{6}$/.test(code)) {
+      showMfaInlineError('setup', 'Escribe el código actual de 6 dígitos de tu app autenticadora.');
+      return;
+    }
+    if (!state.mfa?.factorId) {
+      showMfaInlineError('setup', 'No hay un factor MFA en proceso. Cierra sesión e intenta de nuevo.');
+      return;
+    }
+
+    try {
+      setBusy(true);
       const challenge = await client.auth.mfa.challenge({ factorId: state.mfa.factorId });
       if (challenge.error) throw challenge.error;
 
@@ -2339,16 +2441,30 @@
       if (error) throw error;
 
       await finishMfaAndLoadApp();
-    });
+    } catch (error) {
+      console.error(error);
+      showMfaInlineError('setup', mfaFriendlyError(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function completeMfaVerification(event) {
     event.preventDefault();
-    const code = normalizeMfaCode(byId('mfa-verify-code')?.value);
-    if (!/^\d{6}$/.test(code)) throw new Error('Escribe el código de 6 dígitos de tu app autenticadora.');
-    if (!state.mfa?.factorId || !state.mfa?.challengeId) throw new Error('La verificación MFA no está lista. Solicita un nuevo código.');
+    clearMfaInlineError('verify');
 
-    await run(async () => {
+    const code = normalizeMfaCode(byId('mfa-verify-code')?.value);
+    if (!/^\d{6}$/.test(code)) {
+      showMfaInlineError('verify', 'Escribe el código actual de 6 dígitos de tu app autenticadora.');
+      return;
+    }
+    if (!state.mfa?.factorId || !state.mfa?.challengeId) {
+      showMfaInlineError('verify', 'La verificación MFA no está lista. Presiona Renovar código e intenta de nuevo.');
+      return;
+    }
+
+    try {
+      setBusy(true);
       const { error } = await client.auth.mfa.verify({
         factorId: state.mfa.factorId,
         challengeId: state.mfa.challengeId,
@@ -2357,12 +2473,31 @@
       if (error) throw error;
 
       await finishMfaAndLoadApp();
-    });
+    } catch (error) {
+      console.error(error);
+      showMfaInlineError('verify', mfaFriendlyError(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function retryMfaChallenge() {
-    if (!state.mfa?.factorId) throw new Error('No hay factor MFA seleccionado. Cierra sesión e intenta de nuevo.');
-    await run(() => startMfaVerification(state.mfa.factorId), 'Código renovado. Escribe el código actual de tu app.');
+    clearMfaInlineError('verify');
+    if (!state.mfa?.factorId) {
+      showMfaInlineError('verify', 'No hay factor MFA seleccionado. Cierra sesión e intenta de nuevo.');
+      return;
+    }
+
+    try {
+      setBusy(true);
+      await startMfaVerification(state.mfa.factorId);
+      toast('Código renovado. Escribe el código actual de tu app.');
+    } catch (error) {
+      console.error(error);
+      showMfaInlineError('verify', mfaFriendlyError(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function logoutFromSecurityGate() {
@@ -2512,10 +2647,12 @@
     els['mfa-setup-form']?.addEventListener('submit', completeMfaEnrollment);
     els['mfa-setup-dialog']?.addEventListener('cancel', event => event.preventDefault());
     els['mfa-setup-logout']?.addEventListener('click', logoutFromSecurityGate);
+    els['mfa-setup-code']?.addEventListener('input', () => clearMfaInlineError('setup'));
     els['mfa-verify-form']?.addEventListener('submit', completeMfaVerification);
     els['mfa-verify-dialog']?.addEventListener('cancel', event => event.preventDefault());
     els['mfa-verify-logout']?.addEventListener('click', logoutFromSecurityGate);
     els['mfa-verify-retry']?.addEventListener('click', retryMfaChallenge);
+    els['mfa-verify-code']?.addEventListener('input', () => clearMfaInlineError('verify'));
     els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); clearMfaDialogs(); await client.auth.signOut(); });
     els['main-nav'].addEventListener('click', e => { const b = e.target.closest('[data-section]'); if (b && !b.disabled) navigate(b.dataset.section); });
     els['menu-button'].setAttribute('aria-expanded', 'false');

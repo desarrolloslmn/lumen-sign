@@ -416,4 +416,21 @@ table{min-width:720px}
 .mfa-secret-box code{display:block;margin-top:.65rem;padding:.7rem;border-radius:12px;background:#0f2e50;color:#fff;font-size:.9rem;letter-spacing:.06em;line-height:1.45;word-break:break-all}
 .security-note{padding:1rem;border:1px solid #bdd5ee;border-radius:14px;background:#f1f7fd;color:#0f2e50;line-height:1.45}
 #mfa-setup-code,#mfa-verify-code{font-size:1.4rem;letter-spacing:.35em;text-align:center;font-weight:800}
+
+/* Lumen Sign v7.2.1 - Error visible dentro del modal MFA */
+.mfa-inline-error{
+  padding:.85rem .95rem;
+  border:1px solid #ffd0ca;
+  border-radius:12px;
+  background:var(--danger-soft);
+  color:var(--danger);
+  font-weight:800;
+  line-height:1.45;
+}
+input.input-error,
+input.input-error:focus{
+  border-color:var(--danger);
+  outline:3px solid rgba(180,35,24,.16);
+}
+
 @media(max-width:700px){.mfa-dialog{width:100vw;max-width:100vw;min-height:100dvh;margin:0;border-radius:0;padding:1rem}.mfa-setup-grid{grid-template-columns:1fr}.mfa-qr-box{min-height:auto}.mfa-qr-box img{max-width:220px}.mfa-dialog .button-row.right{flex-direction:column}.mfa-dialog .button-row.right button{width:100%}}
