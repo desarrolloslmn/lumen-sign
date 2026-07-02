@@ -121,7 +121,7 @@
       </div>
       <div class="sidebar-footer">
         <div id="sidebar-user" class="small"></div>
-        <div class="app-version">Lumen Sign 7.1 · Seguridad</div>
+        <div class="app-version">Lumen Sign 7.2 · Seguridad MFA</div>
         <button id="logout-button" class="secondary full" type="button">Cerrar sesión</button>
       </div>
     </aside>
@@ -467,6 +467,57 @@
       <div class="button-row right">
         <button id="force-password-logout" class="secondary" type="button">Cerrar sesión</button>
         <button class="primary" type="submit">Guardar contraseña nueva</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="mfa-setup-dialog" class="dialog mfa-dialog">
+    <div class="dialog-heading">
+      <p class="eyebrow dark">Doble factor obligatorio</p>
+      <h2>Configura tu app autenticadora</h2>
+      <p class="muted">Por seguridad, todos los usuarios deben activar MFA antes de usar Lumen Sign. Escanea el código QR con Google Authenticator, Microsoft Authenticator, Authy, 1Password u otra app compatible.</p>
+    </div>
+    <div class="mfa-setup-grid">
+      <div class="mfa-qr-box">
+        <img id="mfa-qr" alt="Código QR para configurar MFA" />
+      </div>
+      <div class="mfa-secret-box">
+        <strong>Clave manual</strong>
+        <p class="muted small">Si no puedes escanear el QR, copia esta clave en tu app autenticadora.</p>
+        <code id="mfa-secret">—</code>
+      </div>
+    </div>
+    <form id="mfa-setup-form" class="stack">
+      <label>Código de 6 dígitos
+        <input id="mfa-setup-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
+      </label>
+      <div class="security-note">
+        <strong>Importante:</strong> conserva el acceso a tu app autenticadora. Sin este código no podrás entrar a documentos, contratos ni firmas.
+      </div>
+      <div class="button-row right">
+        <button id="mfa-setup-logout" class="secondary" type="button">Cerrar sesión</button>
+        <button class="primary" type="submit">Activar MFA</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="mfa-verify-dialog" class="dialog mfa-dialog">
+    <div class="dialog-heading">
+      <p class="eyebrow dark">Verificación obligatoria</p>
+      <h2>Confirma tu identidad</h2>
+      <p class="muted">Abre tu app autenticadora y escribe el código actual de 6 dígitos para entrar a Lumen Sign.</p>
+    </div>
+    <form id="mfa-verify-form" class="stack">
+      <label>Código de 6 dígitos
+        <input id="mfa-verify-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
+      </label>
+      <div class="security-note">
+        Este paso protege contratos, firmas, documentos y evidencia aunque alguien conozca una contraseña.
+      </div>
+      <div class="button-row right">
+        <button id="mfa-verify-logout" class="secondary" type="button">Cerrar sesión</button>
+        <button id="mfa-verify-retry" class="secondary" type="button">Renovar código</button>
+        <button class="primary" type="submit">Verificar y entrar</button>
       </div>
     </form>
   </dialog>

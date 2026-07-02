@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '7.1.0-seguridad-paso2';
+  const APP_VERSION = '7.2.0-seguridad-paso3-mfa';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
@@ -41,7 +41,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false
+    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -97,7 +97,8 @@
       'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list',
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
       'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-consent',
-      'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout'
+      'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
+      'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-logout','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-logout','mfa-verify-retry'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
   }
@@ -237,23 +238,40 @@
     return /(?:^|[?&#])type=recovery(?:&|$)/i.test(value);
   }
 
+  async function loadProtectedAppData() {
+    if (!state.session || !state.profile) return;
+    await Promise.all([
+      loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(),
+      loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(),
+      loadEmailSystemStatus(), loadAdminDashboard()
+    ]);
+    renderAll();
+    startLiveSync();
+    state.loadedUserId = state.session.user.id;
+  }
+
   async function handleSession(session, force = false) {
     state.session = session;
     if (!session) {
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
       state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null;
-      stopLiveSync();
+      clearForcePasswordDialog(); clearMfaDialogs(); stopLiveSync();
       showAuth(); return;
     }
     const userId = session.user.id;
-    if (!force && state.loadedUserId === userId && state.profile) { showApp(); if (state.profile?.must_change_password) showForcePasswordDialog(); return; }
+    if (!force && state.loadedUserId === userId && state.profile) {
+      showApp();
+      if (state.profile?.must_change_password) { showForcePasswordDialog(); return; }
+      if (!(await enforceMfaForAll())) return;
+      return;
+    }
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
     state.sessionLoadPromise = (async () => {
+      stopLiveSync();
       await loadProfile(); showApp(); configureAppForProfile();
-      await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(), loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard()]);
-      renderAll();
-      if (state.profile?.must_change_password) showForcePasswordDialog();
-      startLiveSync(); state.loadedUserId = userId;
+      if (state.profile?.must_change_password) { showForcePasswordDialog(); state.loadedUserId = userId; return; }
+      if (!(await enforceMfaForAll())) { state.loadedUserId = userId; return; }
+      await loadProtectedAppData();
     })();
     try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
   }
@@ -2206,6 +2224,154 @@
     if (els['force-password-dialog']?.open) els['force-password-dialog'].close();
   }
 
+  function normalizeMfaCode(value) {
+    return String(value || '').replace(/\s+/g, '').trim();
+  }
+
+  async function getVerifiedTotpFactors() {
+    const { data, error } = await client.auth.mfa.listFactors();
+    if (error) throw error;
+    const totp = data?.totp || [];
+    const unverified = totp.filter(factor => factor.status !== 'verified');
+    for (const factor of unverified) {
+      try { await client.auth.mfa.unenroll({ factorId: factor.id }); }
+      catch (error) { console.warn('No se pudo eliminar un factor MFA sin verificar.', error); }
+    }
+    return totp.filter(factor => factor.status === 'verified');
+  }
+
+  async function enforceMfaForAll() {
+    if (!state.session || state.passwordResetActive) return true;
+
+    const { data, error } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error) throw error;
+
+    if (data?.currentLevel === 'aal2') {
+      clearMfaDialogs();
+      return true;
+    }
+
+    const verifiedFactors = await getVerifiedTotpFactors();
+    if (verifiedFactors.length > 0) {
+      await startMfaVerification(verifiedFactors[0].id);
+    } else {
+      await startMfaEnrollment();
+    }
+    return false;
+  }
+
+  async function startMfaEnrollment() {
+    const { data, error } = await client.auth.mfa.enroll({
+      factorType: 'totp',
+      friendlyName: 'Lumen Sign'
+    });
+    if (error) throw error;
+
+    state.mfa = { factorId: data.id, challengeId: null, mode: 'enroll', enrollment: data };
+    showMfaSetupDialog(data);
+  }
+
+  async function startMfaVerification(factorId) {
+    const { data, error } = await client.auth.mfa.challenge({ factorId });
+    if (error) throw error;
+
+    state.mfa = { factorId, challengeId: data.id, mode: 'verify', enrollment: null };
+    showMfaVerifyDialog();
+  }
+
+  function showMfaSetupDialog(enrollment) {
+    state.mfaRequiredActive = true;
+    document.body.classList.add('mfa-required');
+    if (els['mfa-qr']) {
+      const qr = enrollment?.totp?.qr_code || '';
+      els['mfa-qr'].src = qr;
+      els['mfa-qr'].classList.toggle('hidden', !qr);
+    }
+    if (els['mfa-secret']) els['mfa-secret'].textContent = enrollment?.totp?.secret || 'No disponible';
+    byId('mfa-setup-form')?.reset();
+    if (els['mfa-verify-dialog']?.open) els['mfa-verify-dialog'].close();
+    if (!els['mfa-setup-dialog']?.open) els['mfa-setup-dialog']?.showModal();
+    setTimeout(() => byId('mfa-setup-code')?.focus(), 120);
+  }
+
+  function showMfaVerifyDialog() {
+    state.mfaRequiredActive = true;
+    document.body.classList.add('mfa-required');
+    byId('mfa-verify-form')?.reset();
+    if (els['mfa-setup-dialog']?.open) els['mfa-setup-dialog'].close();
+    if (!els['mfa-verify-dialog']?.open) els['mfa-verify-dialog']?.showModal();
+    setTimeout(() => byId('mfa-verify-code')?.focus(), 120);
+  }
+
+  function clearMfaDialogs() {
+    state.mfaRequiredActive = false;
+    state.mfa = { factorId: null, challengeId: null, mode: null, enrollment: null };
+    document.body.classList.remove('mfa-required');
+    byId('mfa-setup-form')?.reset();
+    byId('mfa-verify-form')?.reset();
+    if (els['mfa-setup-dialog']?.open) els['mfa-setup-dialog'].close();
+    if (els['mfa-verify-dialog']?.open) els['mfa-verify-dialog'].close();
+  }
+
+  async function finishMfaAndLoadApp() {
+    const { data } = await client.auth.getSession();
+    state.session = data.session || state.session;
+    clearMfaDialogs();
+    await loadProtectedAppData();
+    toast('Doble factor verificado. Acceso autorizado.');
+  }
+
+  async function completeMfaEnrollment(event) {
+    event.preventDefault();
+    const code = normalizeMfaCode(byId('mfa-setup-code')?.value);
+    if (!/^\d{6}$/.test(code)) throw new Error('Escribe el código de 6 dígitos de tu app autenticadora.');
+    if (!state.mfa?.factorId) throw new Error('No hay un factor MFA en proceso. Cierra sesión e intenta de nuevo.');
+
+    await run(async () => {
+      const challenge = await client.auth.mfa.challenge({ factorId: state.mfa.factorId });
+      if (challenge.error) throw challenge.error;
+
+      const { error } = await client.auth.mfa.verify({
+        factorId: state.mfa.factorId,
+        challengeId: challenge.data.id,
+        code
+      });
+      if (error) throw error;
+
+      await finishMfaAndLoadApp();
+    });
+  }
+
+  async function completeMfaVerification(event) {
+    event.preventDefault();
+    const code = normalizeMfaCode(byId('mfa-verify-code')?.value);
+    if (!/^\d{6}$/.test(code)) throw new Error('Escribe el código de 6 dígitos de tu app autenticadora.');
+    if (!state.mfa?.factorId || !state.mfa?.challengeId) throw new Error('La verificación MFA no está lista. Solicita un nuevo código.');
+
+    await run(async () => {
+      const { error } = await client.auth.mfa.verify({
+        factorId: state.mfa.factorId,
+        challengeId: state.mfa.challengeId,
+        code
+      });
+      if (error) throw error;
+
+      await finishMfaAndLoadApp();
+    });
+  }
+
+  async function retryMfaChallenge() {
+    if (!state.mfa?.factorId) throw new Error('No hay factor MFA seleccionado. Cierra sesión e intenta de nuevo.');
+    await run(() => startMfaVerification(state.mfa.factorId), 'Código renovado. Escribe el código actual de tu app.');
+  }
+
+  async function logoutFromSecurityGate() {
+    clearProfileDraft();
+    clearForcePasswordDialog();
+    clearMfaDialogs();
+    await client.auth.signOut();
+  }
+
   async function markPasswordChanged() {
     const { error } = await client.rpc('mark_password_changed');
     if (!error) return;
@@ -2254,7 +2420,8 @@
       await loadProfile();
       configureAppForProfile(true);
       clearForcePasswordDialog();
-    }, 'Contraseña actualizada. Ya puedes usar Lumen Sign.');
+      if (await enforceMfaForAll()) await loadProtectedAppData();
+    }, 'Contraseña actualizada. Configura o verifica tu doble factor para continuar.');
   }
 
 
@@ -2341,8 +2508,15 @@
     els['reset-confirm-form'].addEventListener('submit', completePasswordReset);
     els['force-password-form']?.addEventListener('submit', completeForcedPasswordChange);
     els['force-password-dialog']?.addEventListener('cancel', event => { if (state.profile?.must_change_password) event.preventDefault(); });
-    els['force-password-logout']?.addEventListener('click', async () => { clearProfileDraft(); clearForcePasswordDialog(); await client.auth.signOut(); });
-    els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); await client.auth.signOut(); });
+    els['force-password-logout']?.addEventListener('click', logoutFromSecurityGate);
+    els['mfa-setup-form']?.addEventListener('submit', completeMfaEnrollment);
+    els['mfa-setup-dialog']?.addEventListener('cancel', event => event.preventDefault());
+    els['mfa-setup-logout']?.addEventListener('click', logoutFromSecurityGate);
+    els['mfa-verify-form']?.addEventListener('submit', completeMfaVerification);
+    els['mfa-verify-dialog']?.addEventListener('cancel', event => event.preventDefault());
+    els['mfa-verify-logout']?.addEventListener('click', logoutFromSecurityGate);
+    els['mfa-verify-retry']?.addEventListener('click', retryMfaChallenge);
+    els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); clearMfaDialogs(); await client.auth.signOut(); });
     els['main-nav'].addEventListener('click', e => { const b = e.target.closest('[data-section]'); if (b && !b.disabled) navigate(b.dataset.section); });
     els['menu-button'].setAttribute('aria-expanded', 'false');
     els['menu-button'].addEventListener('click', toggleMobileMenu);

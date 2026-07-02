@@ -404,3 +404,16 @@ table{min-width:720px}
 /* Lumen Sign v7.1 - cambio obligatorio de contraseña temporal */
 .force-password-dialog{width:min(640px,calc(100vw - 2rem))}.force-password-dialog::backdrop{background:rgba(7,18,31,.78);backdrop-filter:blur(4px)}.password-policy-box{padding:1rem;border:1px solid #bdd5ee;border-radius:14px;background:#f1f7fd;color:#0f2e50}.password-policy-box strong{display:block;margin-bottom:.45rem}.password-policy-box ul{margin:.35rem 0 0 1.15rem;padding:0}.password-policy-box li{margin:.25rem 0}.button-row.right{justify-content:flex-end}.password-change-required .force-password-dialog{border-top:6px solid var(--primary)}
 @media(max-width:700px){.force-password-dialog{width:100vw;max-width:100vw;min-height:100dvh;margin:0;border-radius:0;padding:1rem}}
+
+/* Lumen Sign v7.2 - MFA obligatorio para todos */
+.mfa-dialog{width:min(680px,calc(100vw - 2rem))}
+.mfa-dialog::backdrop{background:rgba(7,18,31,.82);backdrop-filter:blur(5px)}
+.mfa-required .mfa-dialog{border-top:6px solid var(--primary)}
+.mfa-setup-grid{display:grid;grid-template-columns:220px minmax(0,1fr);gap:1rem;align-items:stretch;margin:1rem 0}
+.mfa-qr-box{display:grid;place-items:center;padding:1rem;border:1px solid var(--line);border-radius:16px;background:#fff;min-height:220px}
+.mfa-qr-box img{display:block;max-width:190px;width:100%;height:auto}
+.mfa-secret-box{padding:1rem;border:1px dashed #a9c4dd;border-radius:16px;background:#f8fbff;overflow-wrap:anywhere}
+.mfa-secret-box code{display:block;margin-top:.65rem;padding:.7rem;border-radius:12px;background:#0f2e50;color:#fff;font-size:.9rem;letter-spacing:.06em;line-height:1.45;word-break:break-all}
+.security-note{padding:1rem;border:1px solid #bdd5ee;border-radius:14px;background:#f1f7fd;color:#0f2e50;line-height:1.45}
+#mfa-setup-code,#mfa-verify-code{font-size:1.4rem;letter-spacing:.35em;text-align:center;font-weight:800}
+@media(max-width:700px){.mfa-dialog{width:100vw;max-width:100vw;min-height:100dvh;margin:0;border-radius:0;padding:1rem}.mfa-setup-grid{grid-template-columns:1fr}.mfa-qr-box{min-height:auto}.mfa-qr-box img{max-width:220px}.mfa-dialog .button-row.right{flex-direction:column}.mfa-dialog .button-row.right button{width:100%}}
