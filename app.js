@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '7.2.1-seguridad-mfa-error-visible';
+  const APP_VERSION = '7.3.0-firma-guiada-password-mfa-consentimiento';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
@@ -41,7 +41,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
+    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -96,7 +96,7 @@
       'preview-dialog','preview-title','preview-pages','preview-page-number','preview-page-count','preview-prev-page','preview-next-page','preview-zoom-in','preview-zoom-out','preview-zoom-label','preview-back-document','preview-download',
       'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list',
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
-      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-consent',
+      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-consent',
       'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
       'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
     ].forEach(id => els[id] = byId(id));
@@ -195,6 +195,115 @@
       return 'Código incorrecto o vencido. Abre tu app autenticadora y escribe el código actual de 6 dígitos.';
     }
     return raw;
+  }
+
+
+  function ensureSignConfirmSecurityFields() {
+    const form = byId('sign-confirm-form');
+    if (!form) return;
+
+    const consent = byId('sign-consent')?.closest('label');
+    const submit = form.querySelector('button[type="submit"]');
+
+    let mfaLabel = byId('sign-confirm-mfa-label');
+    if (!mfaLabel) {
+      mfaLabel = document.createElement('label');
+      mfaLabel.id = 'sign-confirm-mfa-label';
+      mfaLabel.className = 'sign-mfa-label';
+      mfaLabel.innerHTML = `Código del autenticador
+        <input id="sign-confirm-mfa-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
+        <span class="hint">Abre tu app autenticadora y escribe el código actual de 6 dígitos.</span>`;
+      if (consent) consent.insertAdjacentElement('beforebegin', mfaLabel);
+      else form.insertBefore(mfaLabel, submit || null);
+    }
+
+    let note = byId('sign-confirm-security-note');
+    if (!note) {
+      note = document.createElement('div');
+      note.id = 'sign-confirm-security-note';
+      note.className = 'security-note sign-security-note';
+      note.innerHTML = '<strong>Firma reforzada:</strong> se validará contraseña, código MFA y consentimiento antes de registrar la firma.';
+      if (consent) consent.insertAdjacentElement('beforebegin', note);
+      else form.insertBefore(note, submit || null);
+    }
+
+    let box = byId('sign-confirm-error');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'sign-confirm-error';
+      box.className = 'sign-inline-error hidden';
+      box.setAttribute('role', 'alert');
+      box.setAttribute('aria-live', 'assertive');
+      form.insertBefore(box, submit || null);
+    }
+
+    els['sign-confirm-mfa-code'] = byId('sign-confirm-mfa-code');
+    els['sign-confirm-security-note'] = note;
+    els['sign-confirm-error'] = box;
+  }
+
+  function clearSignConfirmError() {
+    const box = byId('sign-confirm-error');
+    if (box) {
+      box.textContent = '';
+      box.classList.add('hidden');
+    }
+    ['sign-confirm-password','sign-confirm-mfa-code','sign-consent'].forEach(id => {
+      const input = byId(id);
+      if (!input) return;
+      input.classList.remove('input-error');
+      input.removeAttribute('aria-invalid');
+      input.removeAttribute('aria-describedby');
+    });
+  }
+
+  function showSignConfirmError(target, message) {
+    ensureSignConfirmSecurityFields();
+    const box = byId('sign-confirm-error');
+    const targetId = target === 'password' ? 'sign-confirm-password'
+      : target === 'mfa' ? 'sign-confirm-mfa-code'
+      : target === 'consent' ? 'sign-consent'
+      : '';
+    const input = targetId ? byId(targetId) : null;
+
+    if (box) {
+      box.textContent = message;
+      box.classList.remove('hidden');
+    }
+    if (input) {
+      if (target === 'password' || target === 'mfa') input.value = '';
+      input.classList.add('input-error');
+      input.setAttribute('aria-invalid', 'true');
+      input.setAttribute('aria-describedby', 'sign-confirm-error');
+      setTimeout(() => input.focus(), 60);
+    }
+  }
+
+  function resetSignConfirmForm() {
+    ensureSignConfirmSecurityFields();
+    byId('sign-confirm-form')?.reset();
+    clearSignConfirmError();
+  }
+
+  async function verifyMfaForSigning(code) {
+    const verifiedFactors = await getVerifiedTotpFactors();
+    const factor = verifiedFactors[0];
+    if (!factor?.id) {
+      throw new Error('No hay un autenticador MFA verificado en esta cuenta. Cierra sesión, vuelve a entrar y configura MFA antes de firmar.');
+    }
+
+    const challenge = await client.auth.mfa.challenge({ factorId: factor.id });
+    if (challenge.error) throw challenge.error;
+
+    const { error } = await client.auth.mfa.verify({
+      factorId: factor.id,
+      challengeId: challenge.data.id,
+      code
+    });
+    if (error) throw error;
+
+    const { data } = await client.auth.getSession();
+    state.session = data.session || state.session;
   }
 
   function escapeHtml(value = '') {
@@ -1829,15 +1938,22 @@
   function renderSigningControl(element, field) {
     const values = state.signing.values;
     const value = values[field.id] || '';
-    if (value) element.classList.add('completed');
+    const label = field.label || 'Firma obligatoria';
+    element.classList.toggle('completed', Boolean(value));
+    element.classList.toggle('pending-required', !value);
+    element.setAttribute('aria-label', `${label} en página ${field.page_number}`);
     element.innerHTML += value
-      ? `<div class="field-value"><img src="${state.signing.signatureUrl}" alt="Firma"></div>`
-      : '<button class="sign-field-button" type="button">Aplicar mi firma</button>';
+      ? `<div class="field-value"><img src="${state.signing.signatureUrl}" alt="Firma aplicada"></div>`
+      : `<button class="sign-field-button" type="button" aria-label="Aplicar mi firma en ${escapeHtml(label)}">Aplicar mi firma</button>`;
     const button = element.querySelector('button');
     if (button) button.addEventListener('click', () => {
       values[field.id] = 'signature';
-      renderSigningPages(false);
-      updateSignProgress();
+      renderSigningPages(false).then(() => {
+        updateSignProgress();
+        const next = firstMissingSignField();
+        if (next) setTimeout(() => jumpToSignField(next.id), 120);
+        else toast('Todos los campos obligatorios están completos. Ya puedes finalizar la firma.');
+      });
     });
   }
 
@@ -2060,6 +2176,10 @@
       els['sign-dialog'].showModal();
       await renderSigningPages(true);
       updateSignProgress();
+      setTimeout(() => {
+        const firstPending = firstMissingSignField();
+        if (firstPending) jumpToSignField(firstPending.id);
+      }, 220);
     });
   }
 
@@ -2079,29 +2199,119 @@
     if (!reset) els['sign-pages'].scrollTop = scroll;
   }
 
+  function completedSignFields() {
+    const signing = state.signing;
+    if (!signing) return [];
+    return signing.mine.filter(field => String(signing.values[field.id] || '').trim());
+  }
+
+  function missingSignFields() {
+    const signing = state.signing;
+    if (!signing) return [];
+    return signing.mine.filter(field => !String(signing.values[field.id] || '').trim());
+  }
+
+  function firstMissingSignField() {
+    return missingSignFields()[0] || null;
+  }
+
+  function ensureSignGuidancePanel() {
+    if (!els['sign-dialog'] || byId('sign-guidance-panel')) return byId('sign-guidance-panel');
+    const panel = document.createElement('div');
+    panel.id = 'sign-guidance-panel';
+    panel.className = 'sign-guidance-panel';
+    panel.setAttribute('aria-live', 'polite');
+    const summary = els['sign-progress']?.closest('.signing-summary');
+    if (summary) summary.insertAdjacentElement('afterend', panel);
+    else els['sign-dialog'].insertBefore(panel, els['sign-pages'] || null);
+    panel.addEventListener('click', event => {
+      const button = event.target.closest('[data-sign-jump]');
+      if (!button) return;
+      jumpToSignField(button.dataset.signJump);
+    });
+    return panel;
+  }
+
+  function renderSignGuidancePanel() {
+    const signing = state.signing;
+    const panel = ensureSignGuidancePanel();
+    if (!signing || !panel) return;
+    const total = signing.mine.length;
+    const completed = completedSignFields().length;
+    const missing = missingSignFields();
+    const allDone = missing.length === 0;
+    panel.classList.toggle('complete', allDone);
+    panel.innerHTML = `
+      <div class="sign-guidance-status">
+        <span class="sign-guidance-icon">${allDone ? '✓' : '→'}</span>
+        <div>
+          <strong>${allDone ? 'Campos obligatorios completos' : `Campos pendientes: ${missing.length}`}</strong>
+          <p>${allDone ? 'Ya puedes confirmar tu identidad y finalizar la firma.' : 'Usa “Siguiente campo pendiente” o selecciona un campo de la lista.'}</p>
+        </div>
+        <span class="pill ${allDone ? 'success' : 'warning'}">${completed}/${total}</span>
+      </div>
+      <div class="sign-field-checklist">
+        ${signing.mine.map((field, index) => {
+          const done = Boolean(String(signing.values[field.id] || '').trim());
+          return `<button type="button" class="sign-field-chip ${done ? 'done' : 'pending'}" data-sign-jump="${field.id}">
+            <span>${done ? '✓' : index + 1}</span>
+            <strong>${escapeHtml(field.label || 'Firma')}</strong>
+            <small>Página ${Number(field.page_number) || 1}</small>
+          </button>`;
+        }).join('')}
+      </div>`;
+  }
+
   function updateSignProgress() {
     const signing = state.signing;
     if (!signing) return;
-    const complete = signing.mine.filter(field => String(signing.values[field.id] || '').trim()).length;
-    els['sign-progress'].textContent = `${complete} de ${signing.mine.length} firmas colocadas`;
+    const complete = completedSignFields().length;
+    const total = signing.mine.length;
+    const missing = total - complete;
+    const allDone = missing === 0;
+    els['sign-progress'].textContent = allDone
+      ? `Todos los campos obligatorios completos (${complete}/${total})`
+      : `${complete} de ${total} campos obligatorios completos`;
+    if (els['finish-signing']) {
+      els['finish-signing'].disabled = !allDone;
+      els['finish-signing'].title = allDone ? 'Confirmar identidad y finalizar firma' : `Faltan ${missing} campo(s) obligatorio(s).`;
+    }
+    if (els['next-required-field']) {
+      els['next-required-field'].disabled = false;
+      els['next-required-field'].textContent = allDone ? 'Revisar campos firmados' : 'Siguiente campo pendiente';
+    }
+    renderSignGuidancePanel();
+  }
+
+  function jumpToSignField(fieldId) {
+    if (!fieldId) return;
+    const element = els['sign-pages']?.querySelector(`[data-field-id="${fieldId}"]`);
+    if (!element) return;
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    qsa('.field-overlay.attention', els['sign-pages']).forEach(item => item.classList.remove('attention'));
+    element.classList.add('attention');
+    setTimeout(() => element.classList.remove('attention'), 1600);
   }
 
   function nextRequiredField() {
     const signing = state.signing;
     if (!signing) return;
-    const target = signing.mine.find(field => !String(signing.values[field.id] || '').trim()) || signing.mine[0];
+    const target = firstMissingSignField() || signing.mine[0];
     if (!target) return;
-    const element = els['sign-pages'].querySelector(`[data-field-id="${target.id}"]`);
-    element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    jumpToSignField(target.id);
   }
 
   async function finishVisualSigning() {
     const signing = state.signing;
     if (!signing) return;
-    const missing = signing.mine.filter(field => !String(signing.values[field.id] || '').trim());
-    if (missing.length) throw new Error(`Falta colocar tu firma en ${missing.length} espacio(s).`);
-    byId('sign-confirm-password').value = '';
-    byId('sign-consent').checked = false;
+    const missing = missingSignFields();
+    if (missing.length) {
+      toast(`Completa primero ${missing.length} campo(s) obligatorio(s) antes de finalizar.`, true);
+      jumpToSignField(missing[0].id);
+      updateSignProgress();
+      return;
+    }
+    resetSignConfirmForm();
     state.pendingSignConfirmation = signing.doc.id;
     els['sign-confirm-dialog'].showModal();
     setTimeout(() => byId('sign-confirm-password').focus(), 80);
@@ -2122,15 +2332,63 @@
 
   async function confirmVisualSigning(event) {
     event.preventDefault();
-    const password = byId('sign-confirm-password').value;
-    if (!password) throw new Error('Escribe tu contraseña actual.');
-    if (!byId('sign-consent').checked) throw new Error('Debes aceptar el consentimiento de firma electrónica.');
-    await run(async () => {
-      const { error } = await client.auth.signInWithPassword({ email: state.profile.email, password });
-      if (error) throw new Error('La contraseña no es correcta.');
-      els['sign-confirm-dialog'].close();
+    ensureSignConfirmSecurityFields();
+    clearSignConfirmError();
+
+    const password = byId('sign-confirm-password')?.value || '';
+    const code = normalizeMfaCode(byId('sign-confirm-mfa-code')?.value);
+
+    if (!password) {
+      showSignConfirmError('password', 'Escribe tu contraseña actual para confirmar la firma.');
+      return;
+    }
+    if (!/^\d{6}$/.test(code)) {
+      showSignConfirmError('mfa', 'Escribe el código actual de 6 dígitos de tu app autenticadora.');
+      return;
+    }
+    if (!byId('sign-consent')?.checked) {
+      showSignConfirmError('consent', 'Debes aceptar el consentimiento de firma electrónica para continuar.');
+      return;
+    }
+
+    state.signReauthActive = true;
+    let identityConfirmed = false;
+    try {
+      setBusy(true);
+
+      const { data, error } = await client.auth.signInWithPassword({
+        email: state.profile.email,
+        password
+      });
+      if (error) {
+        showSignConfirmError('password', 'La contraseña no es correcta. Vuelve a escribirla.');
+        return;
+      }
+      state.session = data?.session || state.session;
+
+      try {
+        await verifyMfaForSigning(code);
+        identityConfirmed = true;
+      } catch (mfaError) {
+        console.error(mfaError);
+        showSignConfirmError('mfa', mfaFriendlyError(mfaError));
+        return;
+      }
+    } catch (error) {
+      console.error(error);
+      showSignConfirmError('general', error?.message || 'No se pudo confirmar tu identidad. Intenta de nuevo.');
+      return;
+    } finally {
+      setBusy(false);
+      if (!identityConfirmed) state.signReauthActive = false;
+    }
+
+    els['sign-confirm-dialog'].close();
+    try {
       await executeVisualSigning();
-    });
+    } finally {
+      state.signReauthActive = false;
+    }
   }
 
   async function executeVisualSigning() {
@@ -2686,7 +2944,11 @@
     els['flow-signers-builder'].addEventListener('click',event=>handleOrderedListClick(event,els['flow-signers-builder']));
     els['save-flow'].addEventListener('click', saveFlow);
     els['profile-form'].addEventListener('submit', updateProfile);
+    ensureSignConfirmSecurityFields();
     els['sign-confirm-form'].addEventListener('submit', confirmVisualSigning);
+    els['sign-confirm-password']?.addEventListener('input', clearSignConfirmError);
+    els['sign-confirm-mfa-code']?.addEventListener('input', clearSignConfirmError);
+    els['sign-consent']?.addEventListener('change', clearSignConfirmError);
     els['template-form'].addEventListener('submit', saveCurrentDocumentAsTemplate);
     els['document-template'].addEventListener('change', applySelectedTemplate);
     els['save-template-button'].addEventListener('click', () => openSaveTemplateDialog());
@@ -2801,6 +3063,7 @@
         try {
           if (await handleRecoveryEvent(event, session)) return;
           if (state.passwordResetActive && event === 'SIGNED_IN') { state.session = session; return; }
+          if (state.signReauthActive && (event === 'SIGNED_IN' || event === 'MFA_CHALLENGE_VERIFIED')) { state.session = session; return; }
           if(event==='TOKEN_REFRESHED'||event==='USER_UPDATED'){state.session=session;return;}
           await handleSession(session);
         }
