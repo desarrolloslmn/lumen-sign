@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '7.3.0-firma-guiada-password-mfa-consentimiento';
+  const APP_VERSION = '7.4.0-auditoria-accesos-documentos';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
@@ -320,6 +320,46 @@
     if (!n) return '—';
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function documentIdFromPath(path = '') {
+    const match = String(path || '').match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    return match ? match[0] : '';
+  }
+
+  function currentDocumentContextId(path = '') {
+    return documentIdFromPath(path)
+      || state.preview?.doc?.id
+      || state.signing?.doc?.id
+      || state.prepare?.doc?.id
+      || state.activeDocumentId
+      || '';
+  }
+
+  async function auditDocumentAccess({ documentId, action, filePath = '', fileName = '', result = 'success', metadata = {} }) {
+    if (!state.session || !documentId || !action) return;
+    const payload = {
+      app_version: APP_VERSION,
+      result,
+      file_path: filePath || '',
+      file_name: fileName || '',
+      user_agent: navigator.userAgent.slice(0, 500),
+      page_url: location.pathname + location.search,
+      ...metadata
+    };
+    try {
+      const { error } = await client.rpc('audit_document_access', {
+        p_document_id: documentId,
+        p_action: action,
+        p_file_path: filePath || '',
+        p_file_name: fileName || '',
+        p_result: result,
+        p_metadata: payload
+      });
+      if (error) console.warn('No se pudo registrar auditoría de acceso:', error);
+    } catch (error) {
+      console.warn('No se pudo registrar auditoría de acceso:', error);
+    }
   }
 
   function pill(value) {
@@ -1594,7 +1634,7 @@
   }
 
   function eventLabel(action) {
-    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados',routing_configured:'Orden del proceso configurado',document_paused:'Proceso pausado',document_resumed:'Proceso reanudado',document_cancelled:'Proceso cancelado',deadline_extended:'Fecha límite extendida',participant_reassigned:'Responsable reasignado',correction_draft_created:'Corrección creada',template_created:'Plantilla creada',evidence_package_generated:'Paquete de evidencias generado'}[action] || action);
+    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados',routing_configured:'Orden del proceso configurado',document_paused:'Proceso pausado',document_resumed:'Proceso reanudado',document_cancelled:'Proceso cancelado',deadline_extended:'Fecha límite extendida',participant_reassigned:'Responsable reasignado',correction_draft_created:'Corrección creada',template_created:'Plantilla creada',evidence_package_generated:'Paquete de evidencias generado',document_viewed:'PDF visualizado',document_preparation_viewed:'PDF abierto para preparación',document_signing_viewed:'PDF abierto para firma',document_downloaded:'Documento descargado',document_access_failed:'Acceso a documento fallido'}[action] || action);
   }
 
   async function pauseDocument(id) {
@@ -1744,18 +1784,39 @@
     input.click();
   }
 
-  async function downloadPrivate(path, name) {
+  async function downloadPrivate(path, name, documentId = '') {
+    const resolvedDocumentId = documentId || currentDocumentContextId(path);
     await run(async () => {
-      const { data, error } = await client.storage.from('documents').createSignedUrl(path, 90, { download: name });
-      if (error) throw error;
-      const a = document.createElement('a');
-      a.href = data.signedUrl; a.download = name; a.target = '_blank'; a.rel = 'noopener'; a.click();
+      try {
+        const { data, error } = await client.storage.from('documents').createSignedUrl(path, 90, { download: name });
+        if (error) throw error;
+        await auditDocumentAccess({
+          documentId: resolvedDocumentId,
+          action: 'document_downloaded',
+          filePath: path,
+          fileName: name,
+          result: 'success',
+          metadata: { expires_in_seconds: 90 }
+        });
+        const a = document.createElement('a');
+        a.href = data.signedUrl; a.download = name; a.target = '_blank'; a.rel = 'noopener'; a.click();
+      } catch (error) {
+        await auditDocumentAccess({
+          documentId: resolvedDocumentId,
+          action: 'document_access_failed',
+          filePath: path,
+          fileName: name,
+          result: 'failed',
+          metadata: { attempted_action: 'document_downloaded', error: error?.message || String(error) }
+        });
+        throw error;
+      }
     });
   }
 
   async function openDocumentPreview(id) {
     await run(async () => {
-      const bundle = await getDocumentBundle(id);
+      const bundle = await getDocumentBundle(id, 'document_viewed');
       const pdf = await pdfjsLib.getDocument({ data: bundle.bytes.slice(0) }).promise;
       state.preview = { ...bundle, pdf, page: 1, pageCount: pdf.numPages, zoom: 1.15 };
       els['preview-title'].textContent = bundle.doc.title || 'Documento';
@@ -1787,7 +1848,7 @@
   async function downloadPreviewDocument() {
     const preview = state.preview;
     if (!preview?.doc?.active_file_path) return;
-    await downloadPrivate(preview.doc.active_file_path, preview.doc.active_file_name || 'documento.pdf');
+    await downloadPrivate(preview.doc.active_file_path, preview.doc.active_file_name || 'documento.pdf', preview.doc.id);
   }
 
   async function configureFlow(docId) {
@@ -1851,18 +1912,40 @@
     return [30, 10];
   }
 
-  async function getDocumentBundle(id) {
+  async function getDocumentBundle(id, accessAction = 'document_viewed') {
     const [docRes, partsRes, fieldsRes] = await Promise.all([
       client.from('documents').select('*').eq('id', id).single(),
       client.from('document_participants').select('*').eq('document_id', id).order('sequence'),
       client.from('document_fields').select('*').eq('document_id', id).eq('field_type', 'signature').order('page_number')
     ]);
     [docRes, partsRes, fieldsRes].forEach(response => { if (response.error) throw response.error; });
-    const { data: url, error: urlError } = await client.storage.from('documents').createSignedUrl(docRes.data.active_file_path, 300);
-    if (urlError) throw urlError;
-    const response = await fetch(url.signedUrl);
-    if (!response.ok) throw new Error('No se pudo abrir el PDF.');
-    return { doc: docRes.data, participants: partsRes.data || [], fields: fieldsRes.data || [], bytes: await response.arrayBuffer() };
+    const doc = docRes.data;
+    try {
+      const { data: url, error: urlError } = await client.storage.from('documents').createSignedUrl(doc.active_file_path, 300);
+      if (urlError) throw urlError;
+      const response = await fetch(url.signedUrl);
+      if (!response.ok) throw new Error('No se pudo abrir el PDF.');
+      const bytes = await response.arrayBuffer();
+      await auditDocumentAccess({
+        documentId: doc.id,
+        action: accessAction,
+        filePath: doc.active_file_path,
+        fileName: doc.active_file_name || 'documento.pdf',
+        result: 'success',
+        metadata: { expires_in_seconds: 300 }
+      });
+      return { doc, participants: partsRes.data || [], fields: fieldsRes.data || [], bytes };
+    } catch (error) {
+      await auditDocumentAccess({
+        documentId: doc.id,
+        action: 'document_access_failed',
+        filePath: doc.active_file_path,
+        fileName: doc.active_file_name || 'documento.pdf',
+        result: 'failed',
+        metadata: { attempted_action: accessAction, error: error?.message || String(error) }
+      });
+      throw error;
+    }
   }
 
   function signerOptions(participants, selected = '') {
@@ -1959,7 +2042,7 @@
 
   async function openPrepareDocument(id) {
     await run(async () => {
-      const bundle = await getDocumentBundle(id);
+      const bundle = await getDocumentBundle(id, 'document_preparation_viewed');
       const signers = bundle.participants.filter(participant => participant.participant_role === 'signer');
       if (!signers.length) throw new Error('Configura al menos un firmante.');
       const pdf = await pdfjsLib.getDocument({ data: bundle.bytes.slice(0) }).promise;
@@ -2147,7 +2230,7 @@
     const defaultSignature = state.signatures.find(signature => signature.is_default && !signature.revoked_at) || state.signatures[0];
     if (!defaultSignature) throw new Error('Primero registra una firma en Perfil y firma.');
     await run(async () => {
-      const bundle = await getDocumentBundle(id);
+      const bundle = await getDocumentBundle(id, 'document_signing_viewed');
       const mine = bundle.fields.filter(field => field.assigned_to === state.session.user.id);
       if (!mine.length) throw new Error('No tienes espacios de firma asignados.');
       const { data: signatureUrl, error: signatureError } = await client.storage.from('signatures').createSignedUrl(defaultSignature.storage_path, 300);
@@ -3002,7 +3085,7 @@
       const documentChat = e.target.closest('[data-document-chat]'); if (documentChat) return openDocumentConversation(documentChat.dataset.documentChat);
       const retryEmail = e.target.closest('[data-retry-email]'); if (retryEmail) { await run(async () => { const { error } = await client.rpc('admin_retry_email', { p_outbox_id: Number(retryEmail.dataset.retryEmail) }); if (error) throw error; await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Correo colocado nuevamente en la cola.'); return; }
       const preview = e.target.closest('[data-preview-document]'); if (preview) return openDocumentPreview(preview.dataset.previewDocument);
-      const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName);
+      const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName, currentDocumentContextId(dl.dataset.downloadPath));
       const replace = e.target.closest('[data-replace-document]'); if (replace) return replaceDocumentFile(replace.dataset.replaceDocument);
       const flow = e.target.closest('[data-configure-flow]'); if (flow) return configureFlow(flow.dataset.configureFlow);
       const prepare = e.target.closest('[data-prepare-document]'); if (prepare) return openPrepareDocument(prepare.dataset.prepareDocument);
