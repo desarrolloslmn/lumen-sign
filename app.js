@@ -18,7 +18,8 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '7.4.0-auditoria-accesos-documentos';
+  const APP_VERSION = '7.6.0-edge-access-documentos';
+  const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const state = {
@@ -360,6 +361,40 @@
     } catch (error) {
       console.warn('No se pudo registrar auditoría de acceso:', error);
     }
+  }
+
+  function canDownloadDocument(doc) {
+    if (!doc || !state.session?.user) return false;
+    return doc.owner_id === state.session.user.id || isAdmin() || isContracts();
+  }
+
+  async function requestDocumentAccess({ documentId, path, fileName = '', action = 'document_viewed', download = false, expiresIn = 300 }) {
+    if (!state.session) throw new Error('Tu sesión no está lista. Cierra sesión e ingresa otra vez.');
+    const cleanPath = String(path || '').trim();
+    const resolvedDocumentId = documentId || currentDocumentContextId(cleanPath);
+    if (!resolvedDocumentId) throw new Error('No se pudo identificar el expediente del archivo.');
+    if (!cleanPath) throw new Error('No se encontró la ruta del archivo.');
+
+    const { data, error } = await client.functions.invoke(DOCUMENT_ACCESS_FUNCTION, {
+      body: {
+        document_id: resolvedDocumentId,
+        file_path: cleanPath,
+        file_name: fileName || 'documento.pdf',
+        action,
+        download: Boolean(download),
+        expires_in: Number(expiresIn || 300)
+      }
+    });
+
+    if (error) {
+      console.error('Edge Function document-access falló:', error);
+      throw new Error(error?.message || 'No se pudo solicitar acceso seguro al documento.');
+    }
+    if (!data?.signedUrl) {
+      const message = data?.error || 'La función segura no devolvió una URL temporal.';
+      throw new Error(message);
+    }
+    return data;
   }
 
   function pill(value) {
@@ -1607,13 +1642,13 @@
     if(canConfigure&&hasFields)primary.push(`<button class="primary" data-submit-document="${doc.id}">Iniciar proceso</button>`);
     if(myApproval)primary.push(`<button class="primary" data-preview-document="${doc.id}">1. Revisar PDF</button><button class="primary" data-approve-document="${doc.id}">2. Aprobar documento</button><button class="danger" data-reject-document="${doc.id}">Rechazar</button>`);
     if(mySignature)primary.push(`<button class="primary" data-sign-document="${doc.id}">Revisar y firmar</button>`);
-    if(doc.status==='completed'&&doc.active_file_path)primary.push(`<button class="primary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar PDF final</button>`);
-    if(doc.status==='completed'&&doc.certificate_path)primary.push(`<button class="secondary" data-download-path="${escapeHtml(doc.certificate_path)}" data-download-name="certificado-de-finalizacion.pdf">Descargar certificado</button>`);
-    if(doc.status==='completed'&&doc.evidence_zip_path)primary.push(`<button class="secondary" data-download-path="${escapeHtml(doc.evidence_zip_path)}" data-download-name="paquete-de-evidencias.zip">Descargar evidencias ZIP</button>`);
+    if(canManage&&doc.status==='completed'&&doc.active_file_path)primary.push(`<button class="primary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar PDF final</button>`);
+    if(canManage&&doc.status==='completed'&&doc.certificate_path)primary.push(`<button class="secondary" data-download-path="${escapeHtml(doc.certificate_path)}" data-download-name="certificado-de-finalizacion.pdf">Descargar certificado</button>`);
+    if(canManage&&doc.status==='completed'&&doc.evidence_zip_path)primary.push(`<button class="secondary" data-download-path="${escapeHtml(doc.evidence_zip_path)}" data-download-name="paquete-de-evidencias.zip">Descargar evidencias ZIP</button>`);
     if(doc.status==='completed'&&doc.finalization_status!=='ready')primary.push(`<button class="secondary" data-finalize-evidence="${doc.id}">${doc.finalization_status==='failed'?'Reintentar certificado':'Generar certificado'}</button>`);
     const secondary=[
       doc.active_file_path&&!myApproval&&!mySignature?`<button class="secondary preview-action" data-preview-document="${doc.id}">Vista previa del PDF</button>`:'',
-      doc.active_file_path&&doc.status!=='completed'?`<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar actual</button>`:'',
+      canManage&&doc.active_file_path&&doc.status!=='completed'?`<button class="secondary" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name||'documento.pdf')}">Descargar actual</button>`:'',
       canConfigure&&hasFields?`<button class="secondary" data-prepare-document="${doc.id}">Editar espacios de firma</button>`:'',
       canConfigure?`<button class="secondary" data-configure-flow="${doc.id}">Cambiar responsables</button>`:'',
       canReplace?`<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>`:'',
@@ -1630,7 +1665,7 @@
       return `<div class="participant-group"><h3>${title} <small class="muted">${routing==='parallel'?'en paralelo':'en orden'}</small></h3>${items.length?items.map((item,index)=>`<div class="participant-item"><span>${routing==='parallel'?'↔':index+1}</span><div><strong>${escapeHtml(profileName(item.user_id))}</strong><small class="candidate-note">${routing==='parallel'?'Puede actuar en cualquier orden':index===0?'Actúa primero':'Actúa después de la persona anterior'}${item.acted_at?` · ${fmtDate(item.acted_at)}`:''}</small></div>${pill(item.action_status)}${canManage&&item.action_status==='pending'&&['awaiting_approval','awaiting_signature','paused'].includes(doc.status)?`<button class="secondary compact" data-reassign-participant="${item.id}" data-reassign-document="${doc.id}" data-reassign-role="${item.participant_role}">Reasignar</button>`:''}</div>`).join(''):'<p class="muted">Esta etapa se omitió.</p>'}</div>`;
     };
 
-    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div><div class="detail-tile"><strong>Fecha límite</strong><p>${fmtDate(doc.due_at)}</p></div><div class="detail-tile"><strong>Firmas</strong><p>${doc.signature_routing==='parallel'?'En paralelo':'En orden'}</p></div><div class="detail-tile"><strong>Evidencias</strong><p>${escapeHtml(doc.finalization_status||'pending')}</p></div></div><div class="participant-groups">${participantList(approvers,'Aprobaciones','approver')}${participantList(signers,'Firmas','signer')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td><button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span><button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button></div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
+    els['document-detail'].innerHTML=`<div class="stack"><div class="document-hero"><div class="document-hero-top"><div><p class="eyebrow dark">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[doc.category]||doc.category)}</p><h2>${escapeHtml(doc.title)}</h2><p class="muted">${escapeHtml(doc.description||'Sin descripción')}</p></div>${pill(doc.status)}</div><div class="process-track">${track}</div><div class="process-guidance">${escapeHtml(guidance)}</div><div class="document-primary-actions">${primary.join('')}${secondary}</div></div><div class="detail-grid"><div class="detail-tile"><strong>Propietario</strong><p>${escapeHtml(profileName(doc.owner_id))}</p></div><div class="detail-tile"><strong>Versión</strong><p>v${doc.current_version} · ${fmtBytes(doc.size_bytes)}</p></div><div class="detail-tile"><strong>Última actualización</strong><p>${fmtDate(doc.updated_at)}</p></div><div class="detail-tile"><strong>Fecha límite</strong><p>${fmtDate(doc.due_at)}</p></div><div class="detail-tile"><strong>Firmas</strong><p>${doc.signature_routing==='parallel'?'En paralelo':'En orden'}</p></div><div class="detail-tile"><strong>Evidencias</strong><p>${escapeHtml(doc.finalization_status||'pending')}</p></div></div><div class="participant-groups">${participantList(approvers,'Aprobaciones','approver')}${participantList(signers,'Firmas','signer')}</div><details class="technical-details"><summary>Ver versiones, anexos e historial técnico</summary><div class="stack"><div><h3>Versiones</h3>${versions.length?`<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version=>`<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash||'').slice(0,16))}…</code></td><td>${fmtDate(version.created_at)}</td><td>${canManage?`<button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button>`:'<span class="muted small">Solo propietario/admin</span>'}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Sin versiones.</p>'}</div><div><h3>Anexos</h3>${attachments.length?attachments.map(item=>`<div class="signature-card"><span>${escapeHtml(item.file_name)} · ${fmtBytes(item.size_bytes)}</span>${canManage?`<button class="secondary" data-download-path="${escapeHtml(item.file_path)}" data-download-name="${escapeHtml(item.file_name)}">Descargar</button>`:'<span class="muted small">Solo propietario/admin</span>'}</div>`).join(''):'<p class="muted">Sin anexos.</p>'}</div><div><h3>Firmas aplicadas</h3>${signatures.length?signatures.map(item=>`<div class="timeline-item"><strong>${escapeHtml(profileName(item.signer_id))}</strong><p>${fmtDate(item.signed_at)}</p><p class="muted small">Hash: ${escapeHtml((item.file_hash||'').slice(0,24))}…</p></div>`).join(''):'<p class="muted">Aún no hay firmas.</p>'}</div><div><h3>Historial</h3><div class="timeline">${events.length?events.map(event=>`<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment?`<p>${escapeHtml(event.metadata.comment)}</p>`:''}</div>`).join(''):'<p class="muted">Sin eventos.</p>'}</div></div></div></details></div>`;
   }
 
   function eventLabel(action) {
@@ -1787,30 +1822,16 @@
   async function downloadPrivate(path, name, documentId = '') {
     const resolvedDocumentId = documentId || currentDocumentContextId(path);
     await run(async () => {
-      try {
-        const { data, error } = await client.storage.from('documents').createSignedUrl(path, 90, { download: name });
-        if (error) throw error;
-        await auditDocumentAccess({
-          documentId: resolvedDocumentId,
-          action: 'document_downloaded',
-          filePath: path,
-          fileName: name,
-          result: 'success',
-          metadata: { expires_in_seconds: 90 }
-        });
-        const a = document.createElement('a');
-        a.href = data.signedUrl; a.download = name; a.target = '_blank'; a.rel = 'noopener'; a.click();
-      } catch (error) {
-        await auditDocumentAccess({
-          documentId: resolvedDocumentId,
-          action: 'document_access_failed',
-          filePath: path,
-          fileName: name,
-          result: 'failed',
-          metadata: { attempted_action: 'document_downloaded', error: error?.message || String(error) }
-        });
-        throw error;
-      }
+      const data = await requestDocumentAccess({
+        documentId: resolvedDocumentId,
+        path,
+        fileName: name,
+        action: 'document_downloaded',
+        download: true,
+        expiresIn: 90
+      });
+      const a = document.createElement('a');
+      a.href = data.signedUrl; a.download = name; a.target = '_blank'; a.rel = 'noopener'; a.click();
     });
   }
 
@@ -1821,6 +1842,7 @@
       state.preview = { ...bundle, pdf, page: 1, pageCount: pdf.numPages, zoom: 1.15 };
       els['preview-title'].textContent = bundle.doc.title || 'Documento';
       els['preview-page-count'].textContent = String(pdf.numPages);
+      if (els['preview-download']) els['preview-download'].classList.toggle('hidden', !canDownloadDocument(bundle.doc));
       if (els['document-dialog']?.open) els['document-dialog'].close();
       els['preview-dialog'].showModal();
       await renderPreviewPage();
@@ -1921,29 +1943,20 @@
     [docRes, partsRes, fieldsRes].forEach(response => { if (response.error) throw response.error; });
     const doc = docRes.data;
     try {
-      const { data: url, error: urlError } = await client.storage.from('documents').createSignedUrl(doc.active_file_path, 300);
-      if (urlError) throw urlError;
-      const response = await fetch(url.signedUrl);
+      const access = await requestDocumentAccess({
+        documentId: doc.id,
+        path: doc.active_file_path,
+        fileName: doc.active_file_name || 'documento.pdf',
+        action: accessAction,
+        download: false,
+        expiresIn: 300
+      });
+      const response = await fetch(access.signedUrl);
       if (!response.ok) throw new Error('No se pudo abrir el PDF.');
       const bytes = await response.arrayBuffer();
-      await auditDocumentAccess({
-        documentId: doc.id,
-        action: accessAction,
-        filePath: doc.active_file_path,
-        fileName: doc.active_file_name || 'documento.pdf',
-        result: 'success',
-        metadata: { expires_in_seconds: 300 }
-      });
       return { doc, participants: partsRes.data || [], fields: fieldsRes.data || [], bytes };
     } catch (error) {
-      await auditDocumentAccess({
-        documentId: doc.id,
-        action: 'document_access_failed',
-        filePath: doc.active_file_path,
-        fileName: doc.active_file_name || 'documento.pdf',
-        result: 'failed',
-        metadata: { attempted_action: accessAction, error: error?.message || String(error) }
-      });
+      console.error('No se pudo abrir el PDF con acceso seguro:', error);
       throw error;
     }
   }
