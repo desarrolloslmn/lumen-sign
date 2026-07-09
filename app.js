@@ -18,10 +18,13 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.0.1-ux-detalle-expediente';
+  const APP_VERSION = '8.2.0-revision-colaborativa-privacidad';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
+  const PRIVACY_NOTICE_VERSION = 'LUMEN-PRIVACIDAD-2026-01';
+  const PRIVACY_NOTICE_URL = cfg.privacyNoticeUrl || 'https://lumen.com.mx/aviso';
+  const PRIVACY_NOTICE_TEXT = 'He leído y acepto el Aviso de Privacidad vigente de Lumen.';
   const state = {
     session: null,
     profile: null,
@@ -42,7 +45,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
+    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -97,7 +100,7 @@
       'preview-dialog','preview-title','preview-pages','preview-page-number','preview-page-count','preview-prev-page','preview-next-page','preview-zoom-in','preview-zoom-out','preview-zoom-label','preview-back-document','preview-download',
       'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list',
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
-      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-consent',
+      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-privacy-consent','sign-consent',
       'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
       'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
     ].forEach(id => els[id] = byId(id));
@@ -223,9 +226,19 @@
       note = document.createElement('div');
       note.id = 'sign-confirm-security-note';
       note.className = 'security-note sign-security-note';
-      note.innerHTML = '<strong>Firma reforzada:</strong> se validará contraseña, código MFA y consentimiento antes de registrar la firma.';
+      note.innerHTML = '<strong>Firma reforzada:</strong> se validará contraseña, código MFA, aviso de privacidad y consentimiento antes de registrar la firma.';
       if (consent) consent.insertAdjacentElement('beforebegin', note);
       else form.insertBefore(note, submit || null);
+    }
+
+    let privacy = byId('sign-privacy-consent')?.closest('label');
+    if (!privacy) {
+      privacy = document.createElement('label');
+      privacy.className = 'consent-box privacy-consent-box';
+      privacy.innerHTML = `<input id="sign-privacy-consent" type="checkbox" required />
+        <span>He leído y acepto el <a href="${escapeHtml(PRIVACY_NOTICE_URL)}" target="_blank" rel="noopener noreferrer">Aviso de Privacidad de Lumen</a>.</span>`;
+      if (consent) consent.insertAdjacentElement('beforebegin', privacy);
+      else form.insertBefore(privacy, submit || null);
     }
 
     let box = byId('sign-confirm-error');
@@ -240,6 +253,7 @@
 
     els['sign-confirm-mfa-code'] = byId('sign-confirm-mfa-code');
     els['sign-confirm-security-note'] = note;
+    els['sign-privacy-consent'] = byId('sign-privacy-consent');
     els['sign-confirm-error'] = box;
   }
 
@@ -249,7 +263,7 @@
       box.textContent = '';
       box.classList.add('hidden');
     }
-    ['sign-confirm-password','sign-confirm-mfa-code','sign-consent'].forEach(id => {
+    ['sign-confirm-password','sign-confirm-mfa-code','sign-privacy-consent','sign-consent'].forEach(id => {
       const input = byId(id);
       if (!input) return;
       input.classList.remove('input-error');
@@ -263,6 +277,7 @@
     const box = byId('sign-confirm-error');
     const targetId = target === 'password' ? 'sign-confirm-password'
       : target === 'mfa' ? 'sign-confirm-mfa-code'
+      : target === 'privacy' ? 'sign-privacy-consent'
       : target === 'consent' ? 'sign-consent'
       : '';
     const input = targetId ? byId(targetId) : null;
@@ -634,8 +649,18 @@
     els['admin-dashboard'].innerHTML = cards.map(([label,value]) => `<div class="metric-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
   }
 
+  async function processReviewDeadlinesOnce() {
+    if (!state.session || !isActive()) return;
+    const now = Date.now();
+    if (now - Number(state.reviewDeadlineProcessedAt || 0) < 60000) return;
+    state.reviewDeadlineProcessedAt = now;
+    const { error } = await client.rpc('process_expired_review_deadlines');
+    if (error) console.warn('No se pudieron procesar vencimientos de revisión.', error);
+  }
+
   async function loadDocuments() {
     if (!isActive()) { state.documents = []; return; }
+    await processReviewDeadlinesOnce();
     const { data, error } = await client.from('documents').select('*').order('updated_at', { ascending: false });
     if (error) throw error;
     state.documents = data || [];
@@ -1372,6 +1397,73 @@
     return [...approvers, ...signers];
   }
 
+  function ensureCollaborativeReviewControls() {
+    if (byId('collaborative-review-options')) return;
+    const workflowOptions = document.querySelector('.workflow-options');
+    if (!workflowOptions) return;
+
+    const section = document.createElement('section');
+    section.id = 'collaborative-review-options';
+    section.className = 'collaborative-review-options';
+    section.innerHTML = `
+      <div class="collaborative-review-heading">
+        <div>
+          <p class="eyebrow dark">Revisión colaborativa</p>
+          <h3>Comentarios, sugerencias y fecha límite</h3>
+          <p class="muted">Los revisores podrán dar visto bueno, solicitar cambios y dejar comentarios antes de pasar a firmas.</p>
+        </div>
+        <span class="pill">Antes de firmar</span>
+      </div>
+      <div class="form-grid">
+        <label>Días disponibles para revisar
+          <input id="review-deadline-days" type="number" min="1" max="90" value="5" />
+          <span class="hint">La fecha de revisión es independiente de la fecha límite general del expediente.</span>
+        </label>
+        <label>Al vencer el plazo
+          <select id="review-deadline-policy">
+            <option value="explicit_all">Exigir visto bueno explícito de todos</option>
+            <option value="advance_if_no_blockers">Avanzar si no hay solicitudes de cambio pendientes</option>
+          </select>
+          <span class="hint">Quien no responda se registrará como “Sin observaciones por vencimiento”; nunca como aprobación manual.</span>
+        </label>
+      </div>
+      <div class="logic-note">
+        <strong>Regla de seguridad:</strong> si existe una solicitud de cambio abierta, el documento no avanzará a firmas aunque venza el plazo.
+      </div>`;
+    workflowOptions.insertAdjacentElement('afterend', section);
+  }
+
+  function reviewDeadlineDays() {
+    return numberInputValue('review-deadline-days', 5);
+  }
+
+  function reviewDeadlinePolicy() {
+    return byId('review-deadline-policy')?.value || 'explicit_all';
+  }
+
+  function updateCollaborativeReviewControls(mode = workflowMode()) {
+    ensureCollaborativeReviewControls();
+    const section = byId('collaborative-review-options');
+    if (!section) return;
+    const enabled = mode === 'approval_signature';
+    section.classList.toggle('hidden', !enabled);
+    const routing = byId('approval-routing');
+    if (routing) {
+      if (enabled) routing.value = 'parallel';
+      routing.disabled = enabled;
+      routing.title = enabled ? 'La revisión colaborativa se envía a todos los revisores al mismo tiempo.' : '';
+    }
+    if (els['add-approver']) els['add-approver'].textContent = enabled ? 'Agregar revisor' : 'Agregar aprobador';
+    qsa('.ordered-row', els['approvers-builder']).forEach(row => {
+      const label = row.querySelector('label > .small');
+      const note = row.querySelector('.candidate-note');
+      if (label) label.textContent = enabled ? 'Revisor' : 'Aprobador';
+      if (note) note.textContent = enabled
+        ? 'Puede dar visto bueno, dejar sugerencias o solicitar cambios.'
+        : 'Debe tener rol Aprobador, Contratos o Administrador.';
+    });
+  }
+
   function workflowMode() {
     return document.querySelector('input[name="workflow-mode"]:checked')?.value || 'approval_signature';
   }
@@ -1384,6 +1476,7 @@
     const signatureOnly = mode === 'signature_only';
     els['approval-stage'].classList.toggle('hidden', signatureOnly);
     if (!signatureOnly && !qsa('.ordered-row',els['approvers-builder']).length) addOrderedParticipant(els['approvers-builder'],'approver');
+    updateCollaborativeReviewControls(mode);
   }
 
   function setWizardStep(step) {
@@ -1410,6 +1503,10 @@
     if (step===2) {
       const dueDays = numberInputValue('doc-due-days', 10);
       if (!Number.isFinite(dueDays) || dueDays < 1 || dueDays > 365) throw new Error('Los días para completar deben estar entre 1 y 365.');
+      if (workflowMode() === 'approval_signature') {
+        const reviewDays = reviewDeadlineDays();
+        if (!Number.isFinite(reviewDays) || reviewDays < 1 || reviewDays > 90) throw new Error('Los días para revisión deben estar entre 1 y 90.');
+      }
     }
     if (step===3) {
       const participants=readOrderedParticipants(els['approvers-builder'],els['signers-builder'],workflowMode());
@@ -1432,7 +1529,10 @@
     const dueDays = numberInputValue('doc-due-days', 10);
     const firstReminder = numberInputValue('doc-first-reminder-hours', 24);
     const repeatReminder = numberInputValue('doc-repeat-reminder-hours', 24);
-    els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Aprobar y después firmar':'Solo firmas'}</strong></p><p class="muted">Aprobaciones: ${approvalRoutingMode()==='parallel'?'en paralelo':'en orden'} · Firmas: ${signatureRoutingMode()==='parallel'?'en paralelo':'en orden'}.</p><p class="muted">Fecha límite: ${dueDays} días. Primer recordatorio: ${firstReminder} h; después cada ${repeatReminder} h.</p></div><div class="review-card"><h4>Aprobadores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
+    const reviewSummary = mode === 'approval_signature'
+      ? `<p class="muted">Revisión colaborativa: ${reviewDeadlineDays()} días · ${reviewDeadlinePolicy()==='advance_if_no_blockers'?'avanza al vencer si no hay cambios pendientes':'requiere visto bueno explícito de todos'}.</p>`
+      : '<p class="muted">El documento pasará directamente a firmas.</p>';
+    els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Revisión colaborativa y después firmas':'Firma directa'}</strong></p>${reviewSummary}<p class="muted">Firmas: ${signatureRoutingMode()==='parallel'?'en paralelo':'en orden'}.</p><p class="muted">Fecha límite general: ${dueDays} días. Primer recordatorio: ${firstReminder} h; después cada ${repeatReminder} h.</p></div><div class="review-card"><h4>Revisores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
   }
 
   function applySelectedTemplate() {
@@ -1447,6 +1547,7 @@
     setWorkflowMode(template.workflow_mode || 'approval_signature');
     byId('approval-routing').value = template.approval_routing || 'sequential';
     byId('signature-routing').value = template.signature_routing || 'sequential';
+    updateCollaborativeReviewControls(template.workflow_mode || 'approval_signature');
     setInputValue('doc-due-days', template.due_days || 10);
     setInputValue('doc-first-reminder-hours', template.first_reminder_hours || 24);
     setInputValue('doc-repeat-reminder-hours', template.repeat_reminder_hours || 24);
@@ -1519,6 +1620,9 @@
     if (byId('approval-routing')) byId('approval-routing').value = 'sequential';
     if (byId('signature-routing')) byId('signature-routing').value = 'sequential';
     if (byId('document-template')) byId('document-template').value = '';
+    setInputValue('review-deadline-days', 5);
+    if (byId('review-deadline-policy')) byId('review-deadline-policy').value = 'explicit_all';
+    updateCollaborativeReviewControls('approval_signature');
     state.selectedTemplateFields = [];
     setWizardStep(1);
   }
@@ -1539,6 +1643,16 @@
       const attached=await client.rpc('attach_primary_file',{p_document_id:docId,p_file_path:filePath,p_file_name:file.name,p_file_hash:hash,p_mime_type:file.type||'application/pdf',p_size_bytes:file.size});if(attached.error)throw attached.error;
       if(attachment){const path=`${docId}/attachments/${Date.now()}-${safeFilename(attachment.name)}`,attachmentHash=await sha256(attachment);const up=await client.storage.from('documents').upload(path,attachment,{contentType:attachment.type||'application/octet-stream'});if(up.error)throw up.error;const rec=await client.rpc('add_document_attachment',{p_document_id:docId,p_file_path:path,p_file_name:attachment.name,p_file_hash:attachmentHash,p_mime_type:attachment.type||'application/octet-stream',p_size_bytes:attachment.size});if(rec.error)throw rec.error;}
       const routing=await client.rpc('configure_document_workflow',{p_document_id:docId,p_approval_routing:approvalRoutingMode(),p_signature_routing:signatureRoutingMode()});if(routing.error)throw routing.error;
+      const reviewEnabled = workflowMode() === 'approval_signature';
+      const reviewDueAt = reviewEnabled ? new Date(Date.now() + reviewDeadlineDays() * 86400000).toISOString() : null;
+      const reviewConfig = await client.rpc('configure_collaborative_review', {
+        p_document_id: docId,
+        p_enabled: reviewEnabled,
+        p_review_due_at: reviewDueAt,
+        p_deadline_policy: reviewEnabled ? reviewDeadlinePolicy() : 'explicit_all',
+        p_review_window_days: reviewEnabled ? reviewDeadlineDays() : 5
+      });
+      if (reviewConfig.error) throw reviewConfig.error;
       const flow=await client.rpc('set_document_participants',{p_document_id:docId,p_items:participants});if(flow.error)throw flow.error;
       if (state.selectedTemplateFields.length) {
         const selectedTemplate = state.templates.find(template => template.id === byId('document-template').value);
@@ -1585,18 +1699,19 @@
   async function openDocument(id) {
     state.activeDocumentId = id;
     await run(async () => {
-      const [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes, fieldsRes] = await Promise.all([
+      const [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes, fieldsRes, reviewCommentsRes] = await Promise.all([
         client.from('documents').select('*').eq('id', id).single(),
         client.from('document_participants').select('*').eq('document_id', id).order('sequence'),
         client.from('document_versions').select('*').eq('document_id', id).order('version_number', { ascending: false }),
         client.from('document_attachments').select('*').eq('document_id', id).order('created_at', { ascending: false }),
         client.from('audit_events').select('*').eq('document_id', id).order('created_at', { ascending: false }),
         client.from('document_signatures').select('*').eq('document_id', id).order('signed_at', { ascending: false }),
-        client.from('document_fields').select('*').eq('document_id', id)
+        client.from('document_fields').select('*').eq('document_id', id),
+        client.from('document_review_comments').select('*').eq('document_id', id).order('created_at', { ascending: false })
       ]);
-      [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes, fieldsRes].forEach(r => { if (r.error) throw r.error; });
-      renderDocumentDetail(docRes.data, participantsRes.data || [], versionsRes.data || [], attachmentsRes.data || [], eventsRes.data || [], signaturesRes.data || [], fieldsRes.data || []);
-      els['document-dialog'].showModal();
+      [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes, fieldsRes, reviewCommentsRes].forEach(r => { if (r.error) throw r.error; });
+      renderDocumentDetail(docRes.data, participantsRes.data || [], versionsRes.data || [], attachmentsRes.data || [], eventsRes.data || [], signaturesRes.data || [], fieldsRes.data || [], reviewCommentsRes.data || []);
+      if (!els['document-dialog'].open) els['document-dialog'].showModal();
     });
   }
 
@@ -1605,7 +1720,7 @@
     return p?.full_name || p?.email || 'Usuario';
   }
 
-  function renderDocumentDetail(doc, participants, versions, attachments, events, signatures, fields = []) {
+  function renderDocumentDetail(doc, participants, versions, attachments, events, signatures, fields = [], reviewComments = []) {
     const me = state.session.user.id;
     const currentRole = doc.status === 'awaiting_approval' ? 'approver' : doc.status === 'awaiting_signature' ? 'signer' : null;
     const stagePending = participants.filter(item => item.participant_role === currentRole && item.action_status === 'pending');
@@ -1615,8 +1730,11 @@
     const mySignature = participants.find(item => item.user_id === me && item.participant_role === 'signer' && item.action_status === 'pending' && Number(item.sequence) === minSequence);
     const isAssignedEditor = participants.some(item => item.user_id === me && item.participant_role === 'editor');
     const canConfigure = doc.status === 'draft' && (doc.owner_id === me || isAdmin() || isContracts() || isAssignedEditor);
-    const canReplace = (doc.status === 'draft' && (doc.owner_id === me || isAdmin() || isContracts() || isAssignedEditor)) || (doc.status === 'rejected' && (isAdmin() || isContracts()));
     const canManage = (doc.owner_id === me || isAdmin() || isContracts());
+    const isCollaborativeReview = Boolean(doc.review_enabled);
+    const canReplace = (doc.status === 'draft' && (canManage || isAssignedEditor))
+      || (doc.status === 'rejected' && canManage)
+      || (isCollaborativeReview && doc.status === 'awaiting_approval' && canManage);
     const approvers = participants.filter(item => item.participant_role === 'approver').sort((a, b) => a.sequence - b.sequence);
     const signers = participants.filter(item => item.participant_role === 'signer').sort((a, b) => a.sequence - b.sequence);
     const hasFields = fields.length > 0;
@@ -1642,7 +1760,9 @@
 
     let guidance = '';
     if (doc.status === 'draft') guidance = hasFields ? 'Los espacios de firma están listos. Puedes iniciar el proceso.' : 'El siguiente paso es indicar dónde debe firmar cada persona.';
-    else if (doc.status === 'awaiting_approval') guidance = myApproval ? 'Es tu turno de revisar y decidir.' : 'El documento está esperando a la persona que debe aprobar antes.';
+    else if (doc.status === 'awaiting_approval') guidance = isCollaborativeReview
+      ? (myApproval ? 'Revisa el PDF, deja sugerencias o da tu visto bueno. Las solicitudes de cambio abiertas bloquean el paso a firmas.' : 'La revisión colaborativa está abierta para los revisores asignados.')
+      : (myApproval ? 'Es tu turno de revisar y decidir.' : 'El documento está esperando a la persona que debe aprobar antes.');
     else if (doc.status === 'awaiting_signature') guidance = mySignature ? 'Es tu turno de revisar y colocar tu firma.' : 'El documento está esperando a la persona que debe firmar antes.';
     else if (doc.status === 'completed') guidance = 'El proceso terminó. La versión actual contiene las firmas aplicadas.';
     else if (doc.status === 'rejected') guidance = 'El documento fue rechazado. Crea una corrección conservando el historial original.';
@@ -1655,8 +1775,13 @@
     if (canConfigure && hasFields) primary.push(`<button class="primary large" data-submit-document="${doc.id}">Iniciar proceso</button>`);
     if (myApproval) {
       primary.push(`<button class="primary large" data-preview-document="${doc.id}">Revisar PDF</button>`);
-      primary.push(`<button class="primary large" data-approve-document="${doc.id}">Aprobar</button>`);
-      primary.push(`<button class="danger large" data-reject-document="${doc.id}">Rechazar</button>`);
+      if (isCollaborativeReview) {
+        primary.push(`<button class="primary large" data-review-approve="${doc.id}">Dar visto bueno</button>`);
+        primary.push(`<button class="secondary large" data-review-changes="${doc.id}">Solicitar cambios</button>`);
+      } else {
+        primary.push(`<button class="primary large" data-approve-document="${doc.id}">Aprobar</button>`);
+        primary.push(`<button class="danger large" data-reject-document="${doc.id}">Rechazar</button>`);
+      }
     }
     if (mySignature) primary.push(`<button class="primary large" data-sign-document="${doc.id}">Revisar y firmar</button>`);
     if (!primary.length && doc.active_file_path && doc.status !== 'completed') primary.push(`<button class="primary large" data-preview-document="${doc.id}">Vista previa del PDF</button>`);
@@ -1691,14 +1816,23 @@
         </div>
       </details>` : '';
 
+    const reviewDeadlineLabel = isCollaborativeReview
+      ? `${doc.review_due_at ? fmtDate(doc.review_due_at) : 'Sin fecha'} · ${doc.review_deadline_policy === 'advance_if_no_blockers' ? 'avance automático sin bloqueos' : 'visto bueno explícito'}`
+      : 'No aplica';
     const summaryCards = [
       ['Propietario', profileName(doc.owner_id)],
       ['Mi participación', participation],
       ['Próximo responsable', nextActor],
-      ['Fecha límite', dueLabel],
+      ['Fecha límite general', dueLabel],
+      ['Límite de revisión', reviewDeadlineLabel],
       ['Versión actual', `v${doc.current_version} · ${fmtBytes(doc.size_bytes)}`],
       ['Evidencias', evidenceLabel]
     ].map(([label, value]) => `<article class="detail-tile"><strong>${escapeHtml(label)}</strong><p>${escapeHtml(value)}</p></article>`).join('');
+
+    const participantDecisionPill = item => {
+      if (item.decision_source === 'deadline_no_objection') return '<span class="pill soft">Sin observaciones por vencimiento</span>';
+      return pill(item.action_status);
+    };
 
     const participantList = (items, title, role) => {
       const routing = role === 'approver' ? doc.approval_routing : doc.signature_routing;
@@ -1721,7 +1855,7 @@
               <strong>${escapeHtml(profileName(item.user_id))}</strong>
               <small class="candidate-note">${escapeHtml(help)}${item.acted_at ? ` · ${fmtDate(item.acted_at)}` : ''}</small>
             </div>
-            ${pill(item.action_status)}
+            ${participantDecisionPill(item)}
             ${canManage && item.action_status === 'pending' && ['awaiting_approval', 'awaiting_signature', 'paused'].includes(doc.status) ? `<button class="secondary compact" data-reassign-participant="${item.id}" data-reassign-document="${doc.id}" data-reassign-role="${item.participant_role}">Reasignar</button>` : ''}
           </div>`;
         }).join('') : '<p class="muted">Esta etapa se omitió.</p>'}
@@ -1757,9 +1891,11 @@
         <div class="detail-grid ux-detail-grid">${summaryCards}</div>
       </section>
 
+      ${isCollaborativeReview ? renderCollaborativeReviewSection(doc, reviewComments, canManage) : ''}
+
       <section class="ux-section">
-        <div class="ux-section-title"><h3>Flujo de trabajo</h3><p>Personas que aprueban y firman este expediente.</p></div>
-        <div class="participant-groups ux-flow-grid">${participantList(approvers, 'Aprobaciones', 'approver')}${participantList(signers, 'Firmas', 'signer')}</div>
+        <div class="ux-section-title"><h3>Flujo de trabajo</h3><p>Personas que revisan y firman este expediente.</p></div>
+        <div class="participant-groups ux-flow-grid">${participantList(approvers, isCollaborativeReview ? 'Revisores' : 'Aprobaciones', 'approver')}${participantList(signers, 'Firmas', 'signer')}</div>
       </section>
 
       <details class="technical-details ux-technical-details">
@@ -1774,8 +1910,123 @@
     </div>`;
   }
 
+  function reviewCommentTypeLabel(type) {
+    return ({ suggestion: 'Sugerencia', question: 'Pregunta', change_request: 'Solicitud de cambio' }[type] || type || 'Comentario');
+  }
+
+  function renderCollaborativeReviewSection(doc, comments, canManage) {
+    const openBlocking = comments.filter(item => item.status === 'open' && item.is_blocking).length;
+    const canComment = ['draft','awaiting_approval','rejected'].includes(doc.status);
+    const list = comments.length ? comments.map(item => {
+      const resolved = item.status === 'resolved';
+      const page = item.page_number ? ` · Página ${Number(item.page_number)}` : '';
+      return `<article class="review-comment-card ${item.is_blocking ? 'blocking' : ''} ${resolved ? 'resolved' : ''}">
+        <header>
+          <div>
+            <span class="pill ${item.comment_type === 'change_request' ? 'danger' : item.comment_type === 'suggestion' ? 'warning' : ''}">${escapeHtml(reviewCommentTypeLabel(item.comment_type))}</span>
+            ${item.is_blocking ? '<span class="pill danger">Bloquea el avance</span>' : ''}
+            ${resolved ? '<span class="pill success">Resuelto</span>' : '<span class="pill">Pendiente</span>'}
+          </div>
+          <small>${escapeHtml(profileName(item.author_id))}${escapeHtml(page)} · ${fmtDate(item.created_at)}</small>
+        </header>
+        <p>${escapeHtml(item.body)}</p>
+        ${item.resolution_note ? `<div class="review-resolution"><strong>Resolución:</strong> ${escapeHtml(item.resolution_note)}</div>` : ''}
+        ${canManage && !resolved ? `<button class="secondary compact" data-resolve-review-comment="${item.id}" data-review-document="${doc.id}">Marcar como resuelto</button>` : ''}
+      </article>`;
+    }).join('') : '<div class="empty">Todavía no hay comentarios. Los revisores pueden agregar sugerencias, preguntas o solicitudes de cambio.</div>';
+
+    return `<section class="ux-section collaborative-review-section">
+      <div class="ux-section-title review-title-row">
+        <div><h3>Revisión y discusión</h3><p>Comentarios vinculados con este expediente y su versión actual.</p></div>
+        <div class="review-deadline-badge">
+          <strong>${openBlocking} cambio(s) bloqueante(s)</strong>
+          <span>${doc.review_due_at ? `Límite: ${fmtDate(doc.review_due_at)}` : 'Sin fecha límite de revisión'}</span>
+        </div>
+      </div>
+      ${canComment ? `<form class="review-comment-form" data-review-comment-form="${doc.id}">
+        <div class="form-grid">
+          <label>Tipo de comentario
+            <select id="review-comment-type">
+              <option value="suggestion">Sugerencia</option>
+              <option value="question">Pregunta</option>
+              <option value="change_request">Solicitud de cambio</option>
+            </select>
+          </label>
+          <label>Página (opcional)
+            <input id="review-comment-page" type="number" min="1" max="9999" placeholder="Ej. 3" />
+          </label>
+        </div>
+        <label>Comentario
+          <textarea id="review-comment-body" rows="3" maxlength="3000" required placeholder="Explica claramente la sugerencia, pregunta o cambio solicitado."></textarea>
+        </label>
+        <label class="checkbox-row review-blocking-row">
+          <input id="review-comment-blocking" type="checkbox" />
+          <span>Impedir que el documento pase a firmas hasta resolver este comentario.</span>
+        </label>
+        <div class="button-row right">
+          <button class="secondary" type="button" data-document-chat="${doc.id}">Abrir conversación general</button>
+          <button class="primary" type="submit">Publicar comentario</button>
+        </div>
+      </form>` : ''}
+      <div class="review-comments-list">${list}</div>
+    </section>`;
+  }
+
+  async function addReviewComment(documentId) {
+    const body = byId('review-comment-body')?.value.trim() || '';
+    const type = byId('review-comment-type')?.value || 'suggestion';
+    const pageValue = Number(byId('review-comment-page')?.value || 0);
+    const blocking = type === 'change_request' || Boolean(byId('review-comment-blocking')?.checked);
+    if (!body) throw new Error('Escribe el comentario antes de publicarlo.');
+    await run(async () => {
+      const { error } = await client.rpc('add_review_comment', {
+        p_document_id: documentId,
+        p_comment_type: type,
+        p_body: body,
+        p_page_number: pageValue > 0 ? pageValue : null,
+        p_is_blocking: blocking
+      });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await openDocument(documentId);
+    }, 'Comentario publicado.');
+  }
+
+  async function resolveReviewComment(commentId, documentId) {
+    const note = prompt('Describe brevemente cómo se atendió el comentario:') || '';
+    if (!note.trim()) return;
+    await run(async () => {
+      const { error } = await client.rpc('resolve_review_comment', {
+        p_comment_id: commentId,
+        p_resolution_note: note.trim()
+      });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await openDocument(documentId);
+    }, 'Comentario marcado como resuelto.');
+  }
+
+  async function submitCollaborativeReviewDecision(documentId, decision) {
+    const promptText = decision === 'approve'
+      ? 'Comentario opcional para acompañar tu visto bueno:'
+      : 'Explica los cambios que deben realizarse:';
+    const comment = prompt(promptText) || '';
+    if (decision === 'request_changes' && !comment.trim()) throw new Error('Escribe los cambios solicitados.');
+    await run(async () => {
+      const { error } = await client.rpc('submit_collaborative_review_decision', {
+        p_document_id: documentId,
+        p_decision: decision,
+        p_comment: comment.trim()
+      });
+      if (error) throw error;
+      if (els['document-dialog'].open) els['document-dialog'].close();
+      await refreshData();
+      await openDocument(documentId);
+    }, decision === 'approve' ? 'Visto bueno registrado.' : 'Solicitud de cambios registrada.');
+  }
+
   function eventLabel(action) {
-    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados',routing_configured:'Orden del proceso configurado',document_paused:'Proceso pausado',document_resumed:'Proceso reanudado',document_cancelled:'Proceso cancelado',deadline_extended:'Fecha límite extendida',participant_reassigned:'Responsable reasignado',correction_draft_created:'Corrección creada',template_created:'Plantilla creada',evidence_package_generated:'Paquete de evidencias generado',document_viewed:'PDF visualizado',document_preparation_viewed:'PDF abierto para preparación',document_signing_viewed:'PDF abierto para firma',document_downloaded:'Documento descargado',document_access_failed:'Acceso a documento fallido'}[action] || action);
+    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados',routing_configured:'Orden del proceso configurado',document_paused:'Proceso pausado',document_resumed:'Proceso reanudado',document_cancelled:'Proceso cancelado',deadline_extended:'Fecha límite extendida',participant_reassigned:'Responsable reasignado',correction_draft_created:'Corrección creada',template_created:'Plantilla creada',evidence_package_generated:'Paquete de evidencias generado',document_viewed:'PDF visualizado',document_preparation_viewed:'PDF abierto para preparación',document_signing_viewed:'PDF abierto para firma',document_downloaded:'Documento descargado',document_access_failed:'Acceso a documento fallido',review_comment_added:'Comentario de revisión agregado',review_change_requested:'Cambios solicitados',review_comment_resolved:'Comentario de revisión resuelto',review_ok_registered:'Visto bueno de revisión registrado',review_deadline_processed:'Revisión cerrada por vencimiento',collaborative_review_configured:'Revisión colaborativa configurada',collaborative_review_restarted:'Revisión reiniciada por nueva versión',privacy_notice_accepted:'Aviso de privacidad aceptado'}[action] || action);
   }
 
   async function pauseDocument(id) {
@@ -1917,6 +2168,10 @@
           p_mime_type: file.type || 'application/pdf', p_size_bytes: file.size
         });
         if (error) throw error;
+        if (doc.review_enabled && doc.status === 'awaiting_approval') {
+          const restart = await client.rpc('restart_collaborative_review_after_new_version', { p_document_id: id });
+          if (restart.error) throw restart.error;
+        }
         if (els['document-dialog'].open) els['document-dialog'].close();
         await refreshData();
         await openDocument(id);
@@ -2548,6 +2803,10 @@
       showSignConfirmError('mfa', 'Escribe el código actual de 6 dígitos de tu app autenticadora.');
       return;
     }
+    if (!byId('sign-privacy-consent')?.checked) {
+      showSignConfirmError('privacy', 'Debes leer y aceptar el Aviso de Privacidad para continuar.');
+      return;
+    }
     if (!byId('sign-consent')?.checked) {
       showSignConfirmError('consent', 'Debes aceptar el consentimiento de firma electrónica para continuar.');
       return;
@@ -2570,12 +2829,25 @@
 
       try {
         await verifyMfaForSigning(code);
-        identityConfirmed = true;
       } catch (mfaError) {
         console.error(mfaError);
         showSignConfirmError('mfa', mfaFriendlyError(mfaError));
         return;
       }
+
+      const privacyResult = await client.rpc('record_privacy_acceptance', {
+        p_document_id: state.signing?.doc?.id,
+        p_document_version: Number(state.signing?.doc?.current_version || 1),
+        p_notice_version: PRIVACY_NOTICE_VERSION,
+        p_notice_url: PRIVACY_NOTICE_URL,
+        p_notice_text: PRIVACY_NOTICE_TEXT,
+        p_user_agent: navigator.userAgent.slice(0, 500)
+      });
+      if (privacyResult.error) {
+        showSignConfirmError('general', 'No se pudo registrar la aceptación del Aviso de Privacidad. Intenta nuevamente.');
+        return;
+      }
+      identityConfirmed = true;
     } catch (error) {
       console.error(error);
       showSignConfirmError('general', error?.message || 'No se pudo confirmar tu identidad. Intenta de nuevo.');
@@ -3135,6 +3407,7 @@
     bindPasswordHold(els['sign-confirm-password-toggle'],byId('sign-confirm-password'));
     els['wizard-next'].addEventListener('click',()=>{try{validateWizardStep(state.wizardStep);setWizardStep(state.wizardStep+1);}catch(error){toast(error.message,true);}});
     els['wizard-back'].addEventListener('click',()=>setWizardStep(state.wizardStep-1));
+    ensureCollaborativeReviewControls();
     qsa('input[name="workflow-mode"]').forEach(input=>input.addEventListener('change',()=>setWorkflowMode(input.value)));
     els['add-approver'].addEventListener('click',()=>addOrderedParticipant(els['approvers-builder'],'approver'));
     els['add-signer'].addEventListener('click',()=>addOrderedParticipant(els['signers-builder'],'signer'));
@@ -3150,6 +3423,7 @@
     els['sign-confirm-form'].addEventListener('submit', confirmVisualSigning);
     els['sign-confirm-password']?.addEventListener('input', clearSignConfirmError);
     els['sign-confirm-mfa-code']?.addEventListener('input', clearSignConfirmError);
+    els['sign-privacy-consent']?.addEventListener('change', clearSignConfirmError);
     els['sign-consent']?.addEventListener('change', clearSignConfirmError);
     els['template-form'].addEventListener('submit', saveCurrentDocumentAsTemplate);
     els['document-template'].addEventListener('change', applySelectedTemplate);
@@ -3188,6 +3462,13 @@
     if (els['refresh-admin-dashboard']) els['refresh-admin-dashboard'].addEventListener('click', async () => { await run(async () => { await loadAdminDashboard(); renderAdminDashboard(); }, 'Indicadores actualizados.'); });
     if (els['refresh-templates']) els['refresh-templates'].addEventListener('click', async () => { await run(async () => { await loadTemplates(); renderTemplateList(); }, 'Plantillas actualizadas.'); });
 
+    document.addEventListener('submit', async event => {
+      const reviewForm = event.target.closest('[data-review-comment-form]');
+      if (!reviewForm) return;
+      event.preventDefault();
+      await addReviewComment(reviewForm.dataset.reviewCommentForm);
+    });
+
     document.addEventListener('click', async e => {
       const conversation = e.target.closest('[data-open-conversation]'); if (conversation) return openConversation(conversation.dataset.openConversation);
       const openNotification = e.target.closest('[data-open-notification]'); if (openNotification) {
@@ -3209,6 +3490,9 @@
       const flow = e.target.closest('[data-configure-flow]'); if (flow) return configureFlow(flow.dataset.configureFlow);
       const prepare = e.target.closest('[data-prepare-document]'); if (prepare) return openPrepareDocument(prepare.dataset.prepareDocument);
       const submit = e.target.closest('[data-submit-document]'); if (submit) return submitDocument(submit.dataset.submitDocument);
+      const reviewApprove = e.target.closest('[data-review-approve]'); if (reviewApprove) return submitCollaborativeReviewDecision(reviewApprove.dataset.reviewApprove, 'approve');
+      const reviewChanges = e.target.closest('[data-review-changes]'); if (reviewChanges) return submitCollaborativeReviewDecision(reviewChanges.dataset.reviewChanges, 'request_changes');
+      const resolveReview = e.target.closest('[data-resolve-review-comment]'); if (resolveReview) return resolveReviewComment(resolveReview.dataset.resolveReviewComment, resolveReview.dataset.reviewDocument);
       const approve = e.target.closest('[data-approve-document]'); if (approve) return actOnDocument(approve.dataset.approveDocument, 'approve');
       const reject = e.target.closest('[data-reject-document]'); if (reject) return actOnDocument(reject.dataset.rejectDocument, 'reject');
       const sign = e.target.closest('[data-sign-document]'); if (sign) return signDocument(sign.dataset.signDocument);
@@ -3257,6 +3541,8 @@
 
   async function init() {
     cacheElements();
+    const versionLabel = document.querySelector('.app-version');
+    if (versionLabel) versionLabel.textContent = `Lumen Sign ${APP_VERSION}`;
     bindEvents();
     resetDocumentWizard();
     state.passwordResetActive = recoveryLinkDetected();
