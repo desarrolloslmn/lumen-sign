@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.2.0-revision-colaborativa-privacidad';
+  const APP_VERSION = '8.4.0-flujo-simple-permisos';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -66,6 +66,7 @@
   const isAdmin = () => ['superadmin', 'admin'].includes(state.profile?.role);
   const isContracts = () => state.profile?.role === 'contracts';
   const isActive = () => state.profile?.status === 'active';
+  const canStartProcess = () => isActive() && (isAdmin() || isContracts());
 
   const roleLabels = {
     superadmin: 'Superadministrador', admin: 'Administrador', contracts: 'Contratos',
@@ -942,7 +943,11 @@
     els['user-status-pill'] = byId('user-status-pill');
     els['pending-banner'].classList.toggle('hidden', p.status === 'active');
     els['admin-nav'].classList.toggle('hidden', !isAdmin());
-    qsa('[data-section="new-document"], [data-section="tasks"], [data-section="messages"], [data-section="notifications"]').forEach(btn => btn.disabled = !isActive());
+    qsa('[data-section="tasks"], [data-section="messages"], [data-section="notifications"]').forEach(btn => btn.disabled = !isActive());
+    qsa('[data-section="new-document"]').forEach(btn => {
+      btn.disabled = !canStartProcess();
+      btn.classList.toggle('hidden', !canStartProcess());
+    });
     if (els['save-template-button']) els['save-template-button'].classList.toggle('hidden', !(isAdmin() || isContracts()));
     fillProfileForm(forceProfileForm);
   }
@@ -1021,8 +1026,8 @@
       next = { title:`Tienes una tarea: ${actionable.documents.title}`, text:`Es tu turno de ${actionText}.`, label:'Abrir tarea', document:actionable.document_id };
     } else if (draft) {
       next = { title:`Continúa el borrador: ${draft.title}`, text:'Indica dónde debe firmar cada persona y después inicia el proceso.', label:'Continuar configuración', document:draft.id, prepare:true };
-    } else if (isAdmin() || isContracts() || state.profile.role === 'user') {
-      next = { title:'Todo está al día', text:'Puedes crear un documento con el asistente paso a paso.', label:'Crear documento', action:'new-document', neutral:true };
+    } else if (canStartProcess()) {
+      next = { title:'Todo está al día', text:'Puedes iniciar un proceso con el asistente paso a paso.', label:'Crear documento', action:'new-document', neutral:true };
     } else {
       next = { title:'No tienes tareas pendientes', text:'Cuando un documento llegue a tu turno aparecerá aquí.', label:'Ver documentos', action:'documents', neutral:true };
     }
@@ -1326,6 +1331,7 @@
 
   function navigate(section) {
     if (!isActive() && ['new-document','tasks','documents','history','dashboard','messages','notifications'].includes(section)) section = 'profile';
+    if (section === 'new-document' && !canStartProcess()) section = 'dashboard';
     qsa('.page-section').forEach(s => s.classList.add('hidden'));
     byId(`section-${section}`).classList.remove('hidden');
     qsa('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.section === section));
@@ -1347,8 +1353,12 @@
   }
 
   function allowedRolesForParticipant(role) {
-    if (role === 'approver') return ['approver','contracts','admin','superadmin'];
-    if (role === 'signer') return ['signer','contracts','admin','superadmin'];
+    // El rol general controla permisos de plataforma. La función dentro del
+    // expediente se asigna por documento, por lo que una misma persona puede
+    // revisar y firmar el mismo proceso cuando corresponda.
+    if (role === 'approver' || role === 'signer') {
+      return ['user','approver','signer','contracts','admin','superadmin'];
+    }
     if (role === 'editor') return ['contracts','admin','superadmin'];
     return ['user','approver','signer','contracts','auditor','admin','superadmin'];
   }
@@ -1366,7 +1376,7 @@
     const row = document.createElement('div');
     row.className = 'ordered-row';
     row.dataset.role = role;
-    row.innerHTML = `<span class="order-number">1</span><label><span class="small">${role === 'approver' ? 'Aprobador' : 'Firmante'}</span><select class="ordered-user" data-participant-role="${role}" required>${candidateOptions(role,userId)}</select><span class="candidate-note">${role === 'approver' ? 'Debe tener rol Aprobador, Contratos o Administrador.' : 'Debe tener rol Firmante, Contratos o Administrador.'}</span></label><div class="order-actions"><button class="secondary move-up" type="button" title="Subir">↑</button><button class="secondary move-down" type="button" title="Bajar">↓</button><button class="danger remove-ordered" type="button" title="Quitar">×</button></div>`;
+    row.innerHTML = `<span class="order-number">1</span><label><span class="small">${role === 'approver' ? 'Revisor / aprobador' : 'Firmante'}</span><select class="ordered-user" data-participant-role="${role}" required>${candidateOptions(role,userId)}</select><span class="candidate-note">${role === 'approver' ? 'Puede comentar, solicitar correcciones y dar visto bueno. También puede ser firmante en la siguiente etapa.' : 'Debe tener una firma registrada. Puede ser la misma persona que revisó el documento.'}</span></label><div class="order-actions"><button class="secondary move-up" type="button" title="Subir">↑</button><button class="secondary move-down" type="button" title="Bajar">↓</button><button class="danger remove-ordered" type="button" title="Quitar">×</button></div>`;
     container.appendChild(row);
     renumberOrdered(container);
   }
@@ -1409,26 +1419,24 @@
       <div class="collaborative-review-heading">
         <div>
           <p class="eyebrow dark">Revisión colaborativa</p>
-          <h3>Comentarios, sugerencias y fecha límite</h3>
-          <p class="muted">Los revisores podrán dar visto bueno, solicitar cambios y dejar comentarios antes de pasar a firmas.</p>
+          <h3>Comentarios, correcciones y aprobación</h3>
+          <p class="muted">Todos revisan dentro del plazo. Quien no responda quedará como “Sin observaciones por vencimiento” y no detendrá el proceso.</p>
         </div>
         <span class="pill">Antes de firmar</span>
       </div>
       <div class="form-grid">
         <label>Días disponibles para revisar
           <input id="review-deadline-days" type="number" min="1" max="90" value="5" />
-          <span class="hint">La fecha de revisión es independiente de la fecha límite general del expediente.</span>
+          <span class="hint">Al cargar una versión corregida se abre un nuevo periodo de revisión con esta duración.</span>
         </label>
-        <label>Al vencer el plazo
-          <select id="review-deadline-policy">
-            <option value="explicit_all">Exigir visto bueno explícito de todos</option>
-            <option value="advance_if_no_blockers">Avanzar si no hay solicitudes de cambio pendientes</option>
-          </select>
-          <span class="hint">Quien no responda se registrará como “Sin observaciones por vencimiento”; nunca como aprobación manual.</span>
-        </label>
+        <div class="review-policy-card">
+          <strong>Avance automático al vencer</strong>
+          <p>El silencio no bloquea. Solo una solicitud formal de cambio que siga pendiente requiere atención antes de pasar a firmas.</p>
+          <input id="review-deadline-policy" type="hidden" value="advance_if_no_blockers" />
+        </div>
       </div>
       <div class="logic-note">
-        <strong>Regla de seguridad:</strong> si existe una solicitud de cambio abierta, el documento no avanzará a firmas aunque venza el plazo.
+        <strong>Flujo:</strong> comentarios → corrección del administrador → visto bueno o vencimiento → firmas.
       </div>`;
     workflowOptions.insertAdjacentElement('afterend', section);
   }
@@ -1438,7 +1446,7 @@
   }
 
   function reviewDeadlinePolicy() {
-    return byId('review-deadline-policy')?.value || 'explicit_all';
+    return 'advance_if_no_blockers';
   }
 
   function updateCollaborativeReviewControls(mode = workflowMode()) {
@@ -1457,9 +1465,9 @@
     qsa('.ordered-row', els['approvers-builder']).forEach(row => {
       const label = row.querySelector('label > .small');
       const note = row.querySelector('.candidate-note');
-      if (label) label.textContent = enabled ? 'Revisor' : 'Aprobador';
+      if (label) label.textContent = enabled ? 'Revisor / aprobador' : 'Aprobador';
       if (note) note.textContent = enabled
-        ? 'Puede dar visto bueno, dejar sugerencias o solicitar cambios.'
+        ? 'Puede comentar, solicitar cambios y dar visto bueno. También puede firmar después si se asigna en ambas etapas.'
         : 'Debe tener rol Aprobador, Contratos o Administrador.';
     });
   }
@@ -1530,7 +1538,7 @@
     const firstReminder = numberInputValue('doc-first-reminder-hours', 24);
     const repeatReminder = numberInputValue('doc-repeat-reminder-hours', 24);
     const reviewSummary = mode === 'approval_signature'
-      ? `<p class="muted">Revisión colaborativa: ${reviewDeadlineDays()} días · ${reviewDeadlinePolicy()==='advance_if_no_blockers'?'avanza al vencer si no hay cambios pendientes':'requiere visto bueno explícito de todos'}.</p>`
+      ? `<p class="muted">Revisión colaborativa: ${reviewDeadlineDays()} días · avanza al vencer si no queda una solicitud formal de cambio pendiente.</p>`
       : '<p class="muted">El documento pasará directamente a firmas.</p>';
     els['wizard-review'].innerHTML = `<div class="review-card"><h4>Documento</h4><p><strong>${escapeHtml(byId('doc-title').value.trim())}</strong></p><p class="muted">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[byId('doc-category').value])}</p><p class="small">${escapeHtml(byId('doc-file').files[0]?.name||'')}</p></div><div class="review-card"><h4>Proceso</h4><p><strong>${mode==='approval_signature'?'Revisión colaborativa y después firmas':'Firma directa'}</strong></p>${reviewSummary}<p class="muted">Firmas: ${signatureRoutingMode()==='parallel'?'en paralelo':'en orden'}.</p><p class="muted">Fecha límite general: ${dueDays} días. Primer recordatorio: ${firstReminder} h; después cada ${repeatReminder} h.</p></div><div class="review-card"><h4>Revisores</h4>${people(approvers)}</div><div class="review-card"><h4>Firmantes</h4>${people(signers)}</div>`;
   }
@@ -1621,7 +1629,7 @@
     if (byId('signature-routing')) byId('signature-routing').value = 'sequential';
     if (byId('document-template')) byId('document-template').value = '';
     setInputValue('review-deadline-days', 5);
-    if (byId('review-deadline-policy')) byId('review-deadline-policy').value = 'explicit_all';
+    if (byId('review-deadline-policy')) byId('review-deadline-policy').value = 'advance_if_no_blockers';
     updateCollaborativeReviewControls('approval_signature');
     state.selectedTemplateFields = [];
     setWizardStep(1);
@@ -1629,7 +1637,7 @@
 
   async function createDocument(event) {
     event.preventDefault();
-    if (!isActive()) throw new Error('Tu cuenta no está activa.');
+    if (!canStartProcess()) throw new Error('Solo Administración o Contratos puede iniciar un proceso.');
     validateWizardStep(1); validateWizardStep(3);
     const file=byId('doc-file').files[0], attachment=byId('doc-attachment').files[0];
     await validatePdfSignature(file);
@@ -1649,7 +1657,7 @@
         p_document_id: docId,
         p_enabled: reviewEnabled,
         p_review_due_at: reviewDueAt,
-        p_deadline_policy: reviewEnabled ? reviewDeadlinePolicy() : 'explicit_all',
+        p_deadline_policy: 'advance_if_no_blockers',
         p_review_window_days: reviewEnabled ? reviewDeadlineDays() : 5
       });
       if (reviewConfig.error) throw reviewConfig.error;
@@ -1720,6 +1728,63 @@
     return p?.full_name || p?.email || 'Usuario';
   }
 
+  function setReviewDrawerOpen(open) {
+    const drawer = byId('review-discussion-drawer');
+    const backdrop = byId('review-discussion-backdrop');
+    if (!drawer || !backdrop) return;
+    drawer.classList.toggle('open', Boolean(open));
+    backdrop.classList.toggle('open', Boolean(open));
+    drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+    document.body.classList.toggle('review-drawer-open', Boolean(open));
+    if (open) {
+      setTimeout(() => byId('review-comment-body')?.focus(), 160);
+    }
+  }
+
+  function scrollDocumentDetailSection(sectionId) {
+    const target = byId(sectionId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function focusReviewWorkspace() {
+    const target = byId('document-review-section');
+    if (!target) return;
+    if (target.tagName === 'DETAILS') target.open = true;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => byId('review-comment-body')?.focus(), 280);
+  }
+
+  function friendlyDocumentError(error) {
+    const raw = String(error?.message || error || 'Ocurrió un error.').trim();
+    const lower = raw.toLowerCase();
+    if (lower.includes('solicitudes de cambio pendientes')) {
+      return 'No puedes dar el visto bueno todavía. Revisa la solicitud formal de cambio y espera a que Administración la marque como atendida.';
+    }
+    if (lower.includes('comentarios bloqueantes') || lower.includes('cambios pendientes')) {
+      return 'Hay una solicitud formal de cambio pendiente. Administración debe atenderla o cargar una versión corregida antes de continuar.';
+    }
+    if (lower.includes('row-level security') || lower.includes('permission denied')) {
+      return 'No tienes permiso para realizar esta acción en el expediente.';
+    }
+    if (lower.includes('duplicate') || lower.includes('already exists')) {
+      return 'Ese archivo o registro ya existe. Actualiza el expediente e inténtalo nuevamente.';
+    }
+    return raw;
+  }
+
+  function showDocumentNotice(message, error = false) {
+    const box = byId('document-inline-notice');
+    if (!box) {
+      toast(message, error);
+      return;
+    }
+    box.textContent = message;
+    box.className = `document-inline-notice ${error ? 'error' : 'success'}`;
+    box.setAttribute('role', error ? 'alert' : 'status');
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
   function renderDocumentDetail(doc, participants, versions, attachments, events, signatures, fields = [], reviewComments = []) {
     const me = state.session.user.id;
     const currentRole = doc.status === 'awaiting_approval' ? 'approver' : doc.status === 'awaiting_signature' ? 'signer' : null;
@@ -1731,10 +1796,13 @@
     const isAssignedEditor = participants.some(item => item.user_id === me && item.participant_role === 'editor');
     const canConfigure = doc.status === 'draft' && (doc.owner_id === me || isAdmin() || isContracts() || isAssignedEditor);
     const canManage = (doc.owner_id === me || isAdmin() || isContracts());
+    const canManageVersion = canManage || isAssignedEditor;
     const isCollaborativeReview = Boolean(doc.review_enabled);
-    const canReplace = (doc.status === 'draft' && (canManage || isAssignedEditor))
-      || (doc.status === 'rejected' && canManage)
-      || (isCollaborativeReview && doc.status === 'awaiting_approval' && canManage);
+    const canReplace = canManageVersion && (
+      doc.status === 'draft'
+      || doc.status === 'rejected'
+      || (isCollaborativeReview && doc.status === 'awaiting_approval')
+    );
     const approvers = participants.filter(item => item.participant_role === 'approver').sort((a, b) => a.sequence - b.sequence);
     const signers = participants.filter(item => item.participant_role === 'signer').sort((a, b) => a.sequence - b.sequence);
     const hasFields = fields.length > 0;
@@ -1743,10 +1811,13 @@
     const nextActor = currentPending.length ? currentPending.map(item => profileName(item.user_id)).join(', ') : 'Sin responsable pendiente';
     const dueLabel = doc.due_at ? fmtDate(doc.due_at) : 'Sin fecha límite';
     const evidenceLabel = doc.finalization_status === 'ready' ? 'Lista' : doc.finalization_status === 'failed' ? 'Fallida' : 'Pendiente';
+    const openReviewComments = reviewComments.filter(item => item.status !== 'resolved');
+    const blockingReviewComments = openReviewComments.filter(item => item.comment_type === 'change_request');
+    const discussionCount = reviewComments.length;
 
     const processSteps = [
       { key: 'draft', label: 'Preparación' },
-      { key: 'approval', label: approvers.length ? 'Aprobación' : 'Sin aprobación' },
+      { key: 'approval', label: approvers.length ? (isCollaborativeReview ? 'Revisión y aprobación' : 'Aprobación') : 'Sin aprobación' },
       { key: 'signature', label: 'Firmas' },
       { key: 'completed', label: 'Completado' }
     ];
@@ -1761,7 +1832,7 @@
     let guidance = '';
     if (doc.status === 'draft') guidance = hasFields ? 'Los espacios de firma están listos. Puedes iniciar el proceso.' : 'El siguiente paso es indicar dónde debe firmar cada persona.';
     else if (doc.status === 'awaiting_approval') guidance = isCollaborativeReview
-      ? (myApproval ? 'Revisa el PDF, deja sugerencias o da tu visto bueno. Las solicitudes de cambio abiertas bloquean el paso a firmas.' : 'La revisión colaborativa está abierta para los revisores asignados.')
+      ? (myApproval ? 'Revisa el PDF, comenta y da tu visto bueno. Si no respondes dentro del plazo, se registrará sin observaciones y el flujo continuará.' : 'La revisión está abierta. El silencio al vencer no detendrá el proceso.')
       : (myApproval ? 'Es tu turno de revisar y decidir.' : 'El documento está esperando a la persona que debe aprobar antes.');
     else if (doc.status === 'awaiting_signature') guidance = mySignature ? 'Es tu turno de revisar y colocar tu firma.' : 'El documento está esperando a la persona que debe firmar antes.';
     else if (doc.status === 'completed') guidance = 'El proceso terminó. La versión actual contiene las firmas aplicadas.';
@@ -1784,6 +1855,9 @@
       }
     }
     if (mySignature) primary.push(`<button class="primary large" data-sign-document="${doc.id}">Revisar y firmar</button>`);
+    if (canReplace && isCollaborativeReview && blockingReviewComments.length > 0) {
+      primary.push(`<button class="secondary large corrected-version-action" data-replace-document="${doc.id}">Subir versión corregida</button>`);
+    }
     if (!primary.length && doc.active_file_path && doc.status !== 'completed') primary.push(`<button class="primary large" data-preview-document="${doc.id}">Vista previa del PDF</button>`);
     if (canManage && doc.status === 'completed' && doc.active_file_path) primary.push(`<button class="primary large" data-download-path="${escapeHtml(doc.active_file_path)}" data-download-name="${escapeHtml(doc.active_file_name || 'documento.pdf')}">Descargar PDF final</button>`);
     if (doc.status === 'completed' && doc.finalization_status !== 'ready') primary.push(`<button class="secondary large" data-finalize-evidence="${doc.id}">${doc.finalization_status === 'failed' ? 'Reintentar certificado' : 'Generar certificado'}</button>`);
@@ -1794,7 +1868,7 @@
       canManage && doc.status === 'completed' && doc.evidence_zip_path ? `<button class="secondary" data-download-path="${escapeHtml(doc.evidence_zip_path)}" data-download-name="paquete-de-evidencias.zip">Descargar evidencias ZIP</button>` : '',
       canConfigure && hasFields ? `<button class="secondary" data-prepare-document="${doc.id}">Editar espacios de firma</button>` : '',
       canConfigure ? `<button class="secondary" data-configure-flow="${doc.id}">Cambiar responsables</button>` : '',
-      canReplace ? `<button class="secondary" data-replace-document="${doc.id}">Subir nueva versión</button>` : '',
+      canReplace && !(isCollaborativeReview && blockingReviewComments.length > 0) ? `<button class="secondary" data-replace-document="${doc.id}">${isCollaborativeReview ? 'Subir versión corregida' : 'Subir nueva versión'}</button>` : '',
       canManage && ['rejected', 'completed', 'cancelled'].includes(doc.status) ? `<button class="secondary" data-create-correction="${doc.id}">Crear corrección</button>` : '',
       (isAdmin() || isContracts()) && doc.status === 'draft' && hasFields ? `<button class="secondary" data-save-document-template="${doc.id}">Guardar como plantilla</button>` : ''
     ].filter(Boolean);
@@ -1804,7 +1878,11 @@
       canManage && !['completed', 'cancelled'].includes(doc.status) ? `<button class="secondary" data-extend-deadline="${doc.id}">Extender fecha límite</button>` : '',
       canManage && !['completed', 'cancelled'].includes(doc.status) ? `<button class="danger" data-cancel-document="${doc.id}">Cancelar proceso</button>` : ''
     ].filter(Boolean);
-    const collaborationActions = [`<button class="secondary" data-document-chat="${doc.id}">Conversación del expediente</button>`];
+    const collaborationActions = [
+      isCollaborativeReview
+        ? `<button class="secondary" data-focus-review="true">Abrir revisión y comentarios (${discussionCount})</button>`
+        : `<button class="secondary" data-document-chat="${doc.id}">Conversación del expediente</button>`
+    ];
     const actionSection = (title, items, cls = '') => items.length ? `<div class="document-action-section ${cls}"><span>${escapeHtml(title)}</span>${items.join('')}</div>` : '';
     const actionMenu = (documentActions.length || processActions.length || collaborationActions.length) ? `
       <details class="document-actions-menu">
@@ -1817,7 +1895,7 @@
       </details>` : '';
 
     const reviewDeadlineLabel = isCollaborativeReview
-      ? `${doc.review_due_at ? fmtDate(doc.review_due_at) : 'Sin fecha'} · ${doc.review_deadline_policy === 'advance_if_no_blockers' ? 'avance automático sin bloqueos' : 'visto bueno explícito'}`
+      ? `${doc.review_due_at ? fmtDate(doc.review_due_at) : 'Sin fecha'} · avance automático si no quedan solicitudes de cambio`
       : 'No aplica';
     const summaryCards = [
       ['Propietario', profileName(doc.owner_id)],
@@ -1862,7 +1940,33 @@
       </section>`;
     };
 
+    const reviewWorkspace = isCollaborativeReview
+      ? renderCollaborativeReviewSection(doc, reviewComments, canManageVersion)
+      : '';
+
+    const quickNav = `
+      <nav class="document-quick-nav" aria-label="Navegación rápida del expediente">
+        <button type="button" data-scroll-document-section="document-summary-section">Resumen</button>
+        ${isCollaborativeReview
+          ? `<button type="button" class="discussion-nav-button ${blockingReviewComments.length ? 'attention' : ''}" data-focus-review="true">Revisión <span>${discussionCount}</span></button>`
+          : `<button type="button" data-document-chat="${doc.id}">Conversación</button>`}
+        <button type="button" data-scroll-document-section="document-flow-section">Participantes</button>
+        <button type="button" data-scroll-document-section="document-technical-section">Versiones e historial</button>
+      </nav>`;
+
+    const discussionDrawer = isCollaborativeReview ? `
+      <button class="review-floating-button ${blockingReviewComments.length ? 'attention' : ''}" type="button" data-focus-review="true" aria-label="Abrir revisión y comentarios">
+        <span aria-hidden="true">💬</span>
+        <strong>Revisión</strong>
+        <em>${discussionCount}</em>
+      </button>` : `
+      <button class="review-floating-button general-chat" type="button" data-document-chat="${doc.id}" aria-label="Abrir conversación del expediente">
+        <span aria-hidden="true">💬</span><strong>Conversación</strong>
+      </button>`;
+
     els['document-detail'].innerHTML = `<div class="document-detail-ux">
+      <div id="document-inline-notice" class="document-inline-notice hidden" aria-live="polite"></div>
+
       <section class="document-hero ux-document-hero">
         <div class="document-hero-top">
           <div class="document-title-block">
@@ -1886,19 +1990,20 @@
         </div>
       </section>
 
-      <section class="ux-section">
+      ${reviewWorkspace}
+      ${quickNav}
+
+      <section class="ux-section document-anchor-section" id="document-summary-section">
         <div class="ux-section-title"><h3>Resumen del expediente</h3><p>Información clave para entender el estado sin entrar al historial técnico.</p></div>
         <div class="detail-grid ux-detail-grid">${summaryCards}</div>
       </section>
 
-      ${isCollaborativeReview ? renderCollaborativeReviewSection(doc, reviewComments, canManage) : ''}
-
-      <section class="ux-section">
+      <section class="ux-section document-anchor-section" id="document-flow-section">
         <div class="ux-section-title"><h3>Flujo de trabajo</h3><p>Personas que revisan y firman este expediente.</p></div>
         <div class="participant-groups ux-flow-grid">${participantList(approvers, isCollaborativeReview ? 'Revisores' : 'Aprobaciones', 'approver')}${participantList(signers, 'Firmas', 'signer')}</div>
       </section>
 
-      <details class="technical-details ux-technical-details">
+      <details class="technical-details ux-technical-details document-anchor-section" id="document-technical-section">
         <summary>Ver versiones, anexos e historial técnico</summary>
         <div class="stack">
           <div><h3>Versiones</h3>${versions.length ? `<div class="table-wrap"><table><thead><tr><th>Versión</th><th>Archivo</th><th>Hash</th><th>Fecha</th><th></th></tr></thead><tbody>${versions.map(version => `<tr><td>v${version.version_number}</td><td>${escapeHtml(version.file_name)}</td><td><code title="${escapeHtml(version.file_hash)}">${escapeHtml((version.file_hash || '').slice(0, 16))}…</code></td><td>${fmtDate(version.created_at)}</td><td>${canManage ? `<button class="secondary" data-download-path="${escapeHtml(version.file_path)}" data-download-name="${escapeHtml(version.file_name)}">Descargar</button>` : '<span class="muted small">Solo propietario/admin</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Sin versiones.</p>'}</div>
@@ -1907,6 +2012,8 @@
           <div><h3>Historial</h3><div class="timeline">${events.length ? events.map(event => `<div class="timeline-item"><strong>${escapeHtml(eventLabel(event.action))}</strong><p>${escapeHtml(profileName(event.actor_id))} · ${fmtDate(event.created_at)}</p>${event.metadata?.comment ? `<p>${escapeHtml(event.metadata.comment)}</p>` : ''}</div>`).join('') : '<p class="muted">Sin eventos.</p>'}</div></div>
         </div>
       </details>
+
+      ${discussionDrawer}
     </div>`;
   }
 
@@ -1915,95 +2022,122 @@
   }
 
   function renderCollaborativeReviewSection(doc, comments, canManage) {
-    const openBlocking = comments.filter(item => item.status === 'open' && item.is_blocking).length;
+    const pendingChanges = comments.filter(item =>
+      item.status === 'open' && item.comment_type === 'change_request'
+    ).length;
     const canComment = ['draft','awaiting_approval','rejected'].includes(doc.status);
     const list = comments.length ? comments.map(item => {
       const resolved = item.status === 'resolved';
       const page = item.page_number ? ` · Página ${Number(item.page_number)}` : '';
-      return `<article class="review-comment-card ${item.is_blocking ? 'blocking' : ''} ${resolved ? 'resolved' : ''}">
+      const requiresCorrection = item.comment_type === 'change_request';
+      return `<article class="review-comment-card ${requiresCorrection ? 'blocking' : ''} ${resolved ? 'resolved' : ''}">
         <header>
           <div>
-            <span class="pill ${item.comment_type === 'change_request' ? 'danger' : item.comment_type === 'suggestion' ? 'warning' : ''}">${escapeHtml(reviewCommentTypeLabel(item.comment_type))}</span>
-            ${item.is_blocking ? '<span class="pill danger">Bloquea el avance</span>' : ''}
-            ${resolved ? '<span class="pill success">Resuelto</span>' : '<span class="pill">Pendiente</span>'}
+            <span class="pill ${requiresCorrection ? 'danger' : item.comment_type === 'suggestion' ? 'warning' : ''}">${escapeHtml(reviewCommentTypeLabel(item.comment_type))}</span>
+            ${requiresCorrection ? '<span class="pill danger">Requiere corrección</span>' : ''}
+            ${resolved ? '<span class="pill success">Atendido</span>' : '<span class="pill">Pendiente</span>'}
           </div>
           <small>${escapeHtml(profileName(item.author_id))}${escapeHtml(page)} · ${fmtDate(item.created_at)}</small>
         </header>
         <p>${escapeHtml(item.body)}</p>
-        ${item.resolution_note ? `<div class="review-resolution"><strong>Resolución:</strong> ${escapeHtml(item.resolution_note)}</div>` : ''}
-        ${canManage && !resolved ? `<button class="secondary compact" data-resolve-review-comment="${item.id}" data-review-document="${doc.id}">Marcar como resuelto</button>` : ''}
+        ${item.resolution_note ? `<div class="review-resolution"><strong>Respuesta de Administración:</strong> ${escapeHtml(item.resolution_note)}</div>` : ''}
+        ${canManage && !resolved ? `<button class="secondary compact" data-resolve-review-comment="${item.id}" data-review-document="${doc.id}">Marcar como atendido</button>` : ''}
       </article>`;
-    }).join('') : '<div class="empty">Todavía no hay comentarios. Los revisores pueden agregar sugerencias, preguntas o solicitudes de cambio.</div>';
+    }).join('') : '<div class="empty">Todavía no hay comentarios. Escribe una sugerencia, pregunta o solicitud formal de cambio.</div>';
 
-    return `<section class="ux-section collaborative-review-section">
-      <div class="ux-section-title review-title-row">
-        <div><h3>Revisión y discusión</h3><p>Comentarios vinculados con este expediente y su versión actual.</p></div>
+    return `<details class="ux-section collaborative-review-section review-workspace" id="document-review-section" open>
+      <summary class="review-workspace-summary">
+        <div>
+          <p class="eyebrow dark">Primera etapa</p>
+          <h3>Revisión, comentarios y propuestas</h3>
+          <p>Comenta primero. Después de atender correcciones, los revisores dan su visto bueno o el plazo concluye sin observaciones.</p>
+        </div>
         <div class="review-deadline-badge">
-          <strong>${openBlocking} cambio(s) bloqueante(s)</strong>
+          <strong>${pendingChanges} solicitud(es) de cambio pendiente(s)</strong>
           <span>${doc.review_due_at ? `Límite: ${fmtDate(doc.review_due_at)}` : 'Sin fecha límite de revisión'}</span>
         </div>
+      </summary>
+      <div class="review-workspace-body">
+        ${canComment ? `<form class="review-comment-form" data-review-comment-form="${doc.id}">
+          <div class="form-grid">
+            <label>Tipo de participación
+              <select id="review-comment-type">
+                <option value="suggestion">Sugerencia</option>
+                <option value="question">Pregunta</option>
+                <option value="change_request">Solicitud formal de cambio</option>
+              </select>
+              <span class="hint">Las sugerencias y preguntas no detienen el flujo. Una solicitud formal debe ser atendida por Administración.</span>
+            </label>
+            <label>Página (opcional)
+              <input id="review-comment-page" type="number" min="1" max="9999" placeholder="Ej. 3" />
+            </label>
+          </div>
+          <label>Comentario o propuesta
+            <textarea id="review-comment-body" rows="4" maxlength="3000" required placeholder="Describe claramente tu comentario, propuesta o corrección."></textarea>
+          </label>
+          <div class="review-flow-note">
+            <strong>El silencio no bloquea:</strong> si una persona no responde antes del límite, se registrará “Sin observaciones por vencimiento” y el proceso continuará.
+          </div>
+          <div class="button-row right">
+            <button class="secondary" type="button" data-preview-document="${doc.id}">Abrir PDF</button>
+            <button class="primary" type="submit">Publicar participación</button>
+          </div>
+        </form>` : ''}
+        <div class="review-comments-list">${list}</div>
       </div>
-      ${canComment ? `<form class="review-comment-form" data-review-comment-form="${doc.id}">
-        <div class="form-grid">
-          <label>Tipo de comentario
-            <select id="review-comment-type">
-              <option value="suggestion">Sugerencia</option>
-              <option value="question">Pregunta</option>
-              <option value="change_request">Solicitud de cambio</option>
-            </select>
-          </label>
-          <label>Página (opcional)
-            <input id="review-comment-page" type="number" min="1" max="9999" placeholder="Ej. 3" />
-          </label>
-        </div>
-        <label>Comentario
-          <textarea id="review-comment-body" rows="3" maxlength="3000" required placeholder="Explica claramente la sugerencia, pregunta o cambio solicitado."></textarea>
-        </label>
-        <label class="checkbox-row review-blocking-row">
-          <input id="review-comment-blocking" type="checkbox" />
-          <span>Impedir que el documento pase a firmas hasta resolver este comentario.</span>
-        </label>
-        <div class="button-row right">
-          <button class="secondary" type="button" data-document-chat="${doc.id}">Abrir conversación general</button>
-          <button class="primary" type="submit">Publicar comentario</button>
-        </div>
-      </form>` : ''}
-      <div class="review-comments-list">${list}</div>
-    </section>`;
+    </details>`;
   }
 
   async function addReviewComment(documentId) {
     const body = byId('review-comment-body')?.value.trim() || '';
     const type = byId('review-comment-type')?.value || 'suggestion';
     const pageValue = Number(byId('review-comment-page')?.value || 0);
-    const blocking = type === 'change_request' || Boolean(byId('review-comment-blocking')?.checked);
-    if (!body) throw new Error('Escribe el comentario antes de publicarlo.');
-    await run(async () => {
-      const { error } = await client.rpc('add_review_comment', {
-        p_document_id: documentId,
-        p_comment_type: type,
-        p_body: body,
-        p_page_number: pageValue > 0 ? pageValue : null,
-        p_is_blocking: blocking
+    const blocking = type === 'change_request';
+    if (!body) {
+      showDocumentNotice('Escribe el comentario antes de publicarlo.', true);
+      focusReviewWorkspace();
+      return;
+    }
+    try {
+      await run(async () => {
+        const { error } = await client.rpc('add_review_comment', {
+          p_document_id: documentId,
+          p_comment_type: type,
+          p_body: body,
+          p_page_number: pageValue > 0 ? pageValue : null,
+          p_is_blocking: blocking
+        });
+        if (error) throw error;
+        if (els['document-dialog'].open) els['document-dialog'].close();
+        await openDocument(documentId);
+        focusReviewWorkspace();
+        showDocumentNotice('Comentario publicado correctamente.');
       });
-      if (error) throw error;
-      if (els['document-dialog'].open) els['document-dialog'].close();
-      await openDocument(documentId);
-    }, 'Comentario publicado.');
+    } catch (error) {
+      showDocumentNotice(friendlyDocumentError(error), true);
+      focusReviewWorkspace();
+    }
   }
 
   async function resolveReviewComment(commentId, documentId) {
-    const note = prompt('Describe brevemente cómo se atendió el comentario:') || '';
+    const note = prompt('Describe cómo se atendió la solicitud o qué cambió en la nueva versión:') || '';
     if (!note.trim()) return;
-    await run(async () => {
-      const { error } = await client.rpc('resolve_review_comment', {
-        p_comment_id: commentId,
-        p_resolution_note: note.trim()
+    try {
+      await run(async () => {
+        const { error } = await client.rpc('resolve_review_comment', {
+          p_comment_id: commentId,
+          p_resolution_note: note.trim()
+        });
+        if (error) throw error;
+        if (els['document-dialog'].open) els['document-dialog'].close();
+        await openDocument(documentId);
+        focusReviewWorkspace();
+        showDocumentNotice('Participación marcada como atendida. El revisor puede comprobar la nueva versión.');
       });
-      if (error) throw error;
-      if (els['document-dialog'].open) els['document-dialog'].close();
-      await openDocument(documentId);
-    }, 'Comentario marcado como resuelto.');
+    } catch (error) {
+      showDocumentNotice(friendlyDocumentError(error), true);
+      focusReviewWorkspace();
+    }
   }
 
   async function submitCollaborativeReviewDecision(documentId, decision) {
@@ -2011,18 +2145,29 @@
       ? 'Comentario opcional para acompañar tu visto bueno:'
       : 'Explica los cambios que deben realizarse:';
     const comment = prompt(promptText) || '';
-    if (decision === 'request_changes' && !comment.trim()) throw new Error('Escribe los cambios solicitados.');
-    await run(async () => {
-      const { error } = await client.rpc('submit_collaborative_review_decision', {
-        p_document_id: documentId,
-        p_decision: decision,
-        p_comment: comment.trim()
+    if (decision === 'request_changes' && !comment.trim()) {
+      showDocumentNotice('Escribe los cambios solicitados antes de continuar.', true);
+      focusReviewWorkspace();
+      return;
+    }
+    try {
+      await run(async () => {
+        const { error } = await client.rpc('submit_collaborative_review_decision', {
+          p_document_id: documentId,
+          p_decision: decision,
+          p_comment: comment.trim()
+        });
+        if (error) throw error;
+        if (els['document-dialog'].open) els['document-dialog'].close();
+        await refreshData();
+        await openDocument(documentId);
+        showDocumentNotice(decision === 'approve' ? 'Visto bueno registrado.' : 'Solicitud de cambios registrada.');
+        if (decision === 'request_changes') focusReviewWorkspace();
       });
-      if (error) throw error;
-      if (els['document-dialog'].open) els['document-dialog'].close();
-      await refreshData();
-      await openDocument(documentId);
-    }, decision === 'approve' ? 'Visto bueno registrado.' : 'Solicitud de cambios registrada.');
+    } catch (error) {
+      showDocumentNotice(friendlyDocumentError(error), true);
+      focusReviewWorkspace();
+    }
   }
 
   function eventLabel(action) {
@@ -2137,6 +2282,7 @@
   }
 
   async function openDocumentConversation(documentId) {
+    setReviewDrawerOpen(false);
     await run(async () => {
       const { data: conversationId, error } = await client.rpc('ensure_document_conversation', { p_document_id: documentId });
       if (error) throw error;
@@ -2152,31 +2298,65 @@
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/pdf,.pdf';
+    input.className = 'hidden-file-input';
+    input.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(input);
+
+    const cleanup = () => input.remove();
+    input.addEventListener('cancel', cleanup, { once: true });
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
+      cleanup();
       if (!file) return;
-      validateFile(file, ['application/pdf'], true);
-      await run(async () => {
-        const doc = state.documents.find(d => d.id === id) || (await client.from('documents').select('*').eq('id', id).single()).data;
-        const nextVersion = Number(doc.current_version) + 1;
-        const path = `${id}/v${nextVersion}/${Date.now()}-${safeFilename(file.name)}`;
-        const hash = await sha256(file);
-        const { error: uploadError } = await client.storage.from('documents').upload(path, file, { contentType: file.type || 'application/pdf', upsert: false });
-        if (uploadError) throw uploadError;
-        const { error } = await client.rpc('attach_primary_file', {
-          p_document_id: id, p_file_path: path, p_file_name: file.name, p_file_hash: hash,
-          p_mime_type: file.type || 'application/pdf', p_size_bytes: file.size
+
+      try {
+        validateFile(file, ['application/pdf'], true);
+        await validatePdfSignature(file);
+
+        const docResult = await client.from('documents').select('*').eq('id', id).single();
+        if (docResult.error) throw docResult.error;
+        const doc = docResult.data;
+        const nextVersion = Number(doc.current_version || 0) + 1;
+        const confirmed = window.confirm(
+          `Se cargará “${file.name}” como versión v${nextVersion}.\n\n` +
+          `${doc.review_enabled && doc.status === 'awaiting_approval' ? 'Se abrirá un nuevo periodo de revisión y se notificará a los revisores. Los comentarios permanecerán visibles para conservar el historial.\n\n' : ''}` +
+          '¿Deseas continuar?'
+        );
+        if (!confirmed) return;
+
+        showDocumentNotice(`Cargando ${file.name} como versión v${nextVersion}…`);
+        await run(async () => {
+          const path = `${id}/v${nextVersion}/${Date.now()}-${safeFilename(file.name)}`;
+          const hash = await sha256(file);
+          const { error: uploadError } = await client.storage.from('documents').upload(path, file, {
+            contentType: file.type || 'application/pdf',
+            upsert: false
+          });
+          if (uploadError) throw uploadError;
+
+          const { data: versionResult, error } = await client.rpc('attach_corrected_document_version', {
+            p_document_id: id,
+            p_file_path: path,
+            p_file_name: file.name,
+            p_file_hash: hash,
+            p_mime_type: file.type || 'application/pdf',
+            p_size_bytes: file.size
+          });
+          if (error) throw error;
+
+          if (els['document-dialog'].open) els['document-dialog'].close();
+          await refreshData();
+          await openDocument(id);
+          showDocumentNotice(`Versión v${nextVersion} cargada. ${doc.review_enabled ? 'Los revisores fueron notificados y ya pueden comprobar los cambios.' : 'El expediente ya muestra el archivo nuevo.'}`);
+          if (doc.review_enabled) focusReviewWorkspace();
         });
-        if (error) throw error;
-        if (doc.review_enabled && doc.status === 'awaiting_approval') {
-          const restart = await client.rpc('restart_collaborative_review_after_new_version', { p_document_id: id });
-          if (restart.error) throw restart.error;
-        }
-        if (els['document-dialog'].open) els['document-dialog'].close();
-        await refreshData();
-        await openDocument(id);
-      }, 'Nueva versión cargada.');
+      } catch (error) {
+        console.error(error);
+        showDocumentNotice(friendlyDocumentError(error), true);
+      }
     }, { once: true });
+
+    showDocumentNotice('Selecciona el PDF corregido. Antes de cargarlo podrás confirmar la nueva versión.');
     input.click();
   }
 
@@ -3448,6 +3628,7 @@
     els['clear-signature'].addEventListener('click', clearCanvas);
     els['save-signature'].addEventListener('click', saveSignature);
     els['new-conversation'].addEventListener('click', () => { renderConversationMembersPicker(); els['conversation-dialog'].showModal(); });
+    els['document-dialog']?.addEventListener('close', () => setReviewDrawerOpen(false));
     els['conversation-form'].addEventListener('submit', createConversation);
     els['chat-form'].addEventListener('submit', sendChatMessage);
     els['mark-all-notifications'].addEventListener('click', async () => {
@@ -3470,6 +3651,10 @@
     });
 
     document.addEventListener('click', async e => {
+      const focusReview = e.target.closest('[data-focus-review]'); if (focusReview) { e.preventDefault(); focusReviewWorkspace(); return; }
+      const toggleReviewDrawer = e.target.closest('[data-toggle-review-drawer]'); if (toggleReviewDrawer) { e.preventDefault(); focusReviewWorkspace(); return; }
+      const closeReviewDrawer = e.target.closest('[data-close-review-drawer]'); if (closeReviewDrawer) { e.preventDefault(); setReviewDrawerOpen(false); return; }
+      const scrollSection = e.target.closest('[data-scroll-document-section]'); if (scrollSection) { e.preventDefault(); scrollDocumentDetailSection(scrollSection.dataset.scrollDocumentSection); return; }
       const conversation = e.target.closest('[data-open-conversation]'); if (conversation) return openConversation(conversation.dataset.openConversation);
       const openNotification = e.target.closest('[data-open-notification]'); if (openNotification) {
         await client.rpc('mark_notification_read', { p_notification_id: Number(openNotification.dataset.openNotification) });
