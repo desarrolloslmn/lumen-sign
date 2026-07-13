@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.4.2-cambio-contrasena-sin-revalidacion';
+  const APP_VERSION = '8.4.3-cambio-contrasena-seguro';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -3251,8 +3251,11 @@
     if (/reauthentication_needed|reauthentication_not_valid/i.test(message)) {
       return 'La sesión de seguridad venció. Cierra sesión, vuelve a ingresar y realiza el cambio inmediatamente.';
     }
-    if (/invalid login credentials/i.test(message)) {
-      return 'No fue posible validar la sesión. Cierra sesión, vuelve a ingresar y realiza el cambio inmediatamente.';
+    if (/current password required/i.test(message)) {
+      return 'Escribe la contraseña temporal con la que acabas de ingresar.';
+    }
+    if (/invalid current password|current password.*incorrect|invalid login credentials/i.test(message)) {
+      return 'La contraseña temporal no coincide. Escríbela exactamente como la usaste al iniciar sesión, sin espacios adicionales.';
     }
     if (/same password|different from the old|new password should be different/i.test(message)) {
       return 'La contraseña nueva debe ser diferente de la contraseña temporal.';
@@ -3271,28 +3274,28 @@
     ensureForcePasswordErrorElement();
     clearForcePasswordInlineError();
 
-    // La sesión ya fue autenticada con la contraseña temporal en el login.
-    // No volvemos a pedirla ni a validarla en un segundo cliente, porque esa
-    // comprobación redundante podía devolver "Invalid login credentials"
-    // aunque el acceso inicial hubiera sido correcto.
+    // El proyecto tiene activa la regla de Supabase:
+    // "Require current password when changing password".
+    // Por eso la contraseña temporal debe enviarse en la MISMA operación
+    // que establece la contraseña nueva. No se abre una segunda sesión.
     const currentPasswordInput = byId('force-current-password');
     const currentPasswordLabel = currentPasswordInput?.closest('label');
 
     if (currentPasswordInput) {
-      currentPasswordInput.required = false;
-      currentPasswordInput.disabled = true;
+      currentPasswordInput.required = true;
+      currentPasswordInput.disabled = false;
       currentPasswordInput.value = '';
-      currentPasswordInput.setAttribute('aria-hidden', 'true');
+      currentPasswordInput.removeAttribute('aria-hidden');
     }
 
     if (currentPasswordLabel) {
-      currentPasswordLabel.hidden = true;
-      currentPasswordLabel.setAttribute('aria-hidden', 'true');
+      currentPasswordLabel.hidden = false;
+      currentPasswordLabel.removeAttribute('aria-hidden');
     }
 
     if (!els['force-password-dialog'].open) {
       els['force-password-dialog'].showModal();
-      setTimeout(() => byId('force-new-password')?.focus(), 80);
+      setTimeout(() => byId('force-current-password')?.focus(), 80);
     }
   }
 
@@ -3569,20 +3572,27 @@
         throw new Error('Tu sesión no está lista. Cierra sesión e ingresa otra vez.');
       }
 
+      const currentPassword = byId('force-current-password')?.value || '';
       const newPassword = byId('force-new-password')?.value || '';
       const confirmation = byId('force-confirm-password')?.value || '';
 
+      if (!currentPassword) {
+        throw new Error('Escribe la contraseña temporal con la que acabas de ingresar.');
+      }
       if (!passwordMeetsSecurityPolicy(newPassword)) {
         throw new Error('La contraseña nueva debe tener mínimo 12 caracteres, mayúscula, minúscula, número y símbolo.');
       }
       if (newPassword !== confirmation) {
         throw new Error('La confirmación no coincide con la contraseña nueva.');
       }
+      if (newPassword === currentPassword) {
+        throw new Error('La contraseña nueva debe ser diferente de la contraseña temporal.');
+      }
 
       setBusy(true);
 
-      // Si el usuario ya tiene un factor MFA verificado, Supabase exige AAL2
-      // antes de permitir el cambio. Primero se confirma el autenticador.
+      // Si existe MFA verificado, Supabase exige AAL2 antes de permitir
+      // la modificación de la contraseña.
       const { data: aalData, error: aalError } =
         await client.auth.mfa.getAuthenticatorAssuranceLevel();
       if (aalError) throw aalError;
@@ -3593,14 +3603,16 @@
         await startMfaVerification(verifiedFactors[0].id, 'password-change');
         showMfaInlineError(
           'verify',
-          'Confirma primero el código de tu autenticador. Después volverás automáticamente al cambio de contraseña.'
+          'Confirma primero el código de tu autenticador. Después volverás al cambio de contraseña.'
         );
         return;
       }
 
-      // La sesión actual ya demuestra que la contraseña temporal fue válida.
-      // Se actualiza directamente sin iniciar una segunda sesión de validación.
+      // La regla "Require current password when changing password" exige
+      // current_password. Se envía junto con la contraseña nueva en una
+      // sola operación; no se crea una segunda sesión de autenticación.
       const { error: updateError } = await client.auth.updateUser({
+        current_password: currentPassword,
         password: newPassword
       });
       if (updateError) throw updateError;

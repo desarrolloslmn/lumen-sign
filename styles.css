@@ -1716,10 +1716,11 @@ body.review-drawer-open{
 }
 
 
+
 /* ==========================================================
-   Lumen Sign v8.4.2 — Cambio de contraseña
-   La contraseña temporal ya fue validada durante el login.
+   Lumen Sign v8.4.3 — Cambio de contraseña seguro
    ========================================================== */
-#force-password-dialog label[hidden] {
-  display: none !important;
+#force-password-dialog label[aria-hidden="false"],
+#force-password-dialog label:not([hidden]) {
+  display: grid;
 }
