@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.4.3-cambio-contrasena-seguro';
+  const APP_VERSION = '8.5-experiencia-mobile-directores';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -936,6 +936,78 @@
   }
 
 
+  function ensureMobileBottomNavigation() {
+    let mobileNav = byId('mobile-bottom-nav');
+
+    if (!mobileNav) {
+      mobileNav = document.createElement('nav');
+      mobileNav.id = 'mobile-bottom-nav';
+      mobileNav.className = 'mobile-bottom-nav';
+      mobileNav.setAttribute('aria-label', 'Navegación principal móvil');
+      mobileNav.innerHTML = `
+        <button type="button" class="mobile-nav-item" data-mobile-section="dashboard" aria-label="Inicio">
+          <span aria-hidden="true">⌂</span>
+          <strong>Inicio</strong>
+        </button>
+        <button type="button" class="mobile-nav-item" data-mobile-section="tasks" aria-label="Mis tareas">
+          <span aria-hidden="true">✓</span>
+          <strong>Tareas</strong>
+          <em id="mobile-task-badge" class="mobile-nav-badge hidden">0</em>
+        </button>
+        <button type="button" class="mobile-nav-item" data-mobile-section="documents" aria-label="Mis documentos">
+          <span aria-hidden="true">▤</span>
+          <strong>Documentos</strong>
+        </button>
+        <button type="button" class="mobile-nav-item" data-mobile-more="true" aria-label="Abrir más opciones">
+          <span aria-hidden="true">⋯</span>
+          <strong>Más</strong>
+        </button>`;
+
+      mobileNav.addEventListener('click', event => {
+        const sectionButton = event.target.closest('[data-mobile-section]');
+        if (sectionButton && !sectionButton.disabled) {
+          navigate(sectionButton.dataset.mobileSection);
+          return;
+        }
+
+        const moreButton = event.target.closest('[data-mobile-more]');
+        if (moreButton) toggleMobileMenu();
+      });
+
+      document.body.appendChild(mobileNav);
+    }
+
+    mobileNav.classList.toggle('hidden', !state.session);
+    const taskButton = mobileNav.querySelector('[data-mobile-section="tasks"]');
+    if (taskButton) taskButton.disabled = !isActive();
+
+    syncMobileBottomNavigation();
+  }
+
+  function syncMobileBottomNavigation(section = '') {
+    const mobileNav = byId('mobile-bottom-nav');
+    if (!mobileNav) return;
+
+    const activeSection = section
+      || qsa('.nav-item').find(item => item.classList.contains('active'))?.dataset.section
+      || 'dashboard';
+
+    mobileNav.querySelectorAll('[data-mobile-section]').forEach(button => {
+      const active = button.dataset.mobileSection === activeSection;
+      button.classList.toggle('active', active);
+      if (active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
+
+    const taskCount = state.tasks.filter(item => item.is_actionable).length;
+    const badge = byId('mobile-task-badge');
+    if (badge) {
+      badge.textContent = taskCount > 99 ? '99+' : String(taskCount);
+      badge.classList.toggle('hidden', taskCount === 0);
+    }
+  }
+
+
   function configureAppForProfile(forceProfileForm = false) {
     const p = state.profile;
     els['sidebar-user'].innerHTML = `<strong>${escapeHtml(p.full_name || p.email)}</strong><br>${escapeHtml(roleLabels[p.role] || p.role)}`;
@@ -950,6 +1022,7 @@
     });
     if (els['save-template-button']) els['save-template-button'].classList.toggle('hidden', !(isAdmin() || isContracts()));
     fillProfileForm(forceProfileForm);
+    ensureMobileBottomNavigation();
   }
 
 
@@ -1059,13 +1132,15 @@
   }
 
   function documentTable(docs, includeCategory = true) {
-    return `<div class="table-wrap"><table><thead><tr><th>Título</th>${includeCategory ? '<th>Tipo</th>' : ''}<th>Mi participación</th><th>Estado</th><th>Versión</th><th>Actualización</th><th></th></tr></thead><tbody>
+    return `<div class="table-wrap mobile-document-table"><table><thead><tr><th>Título</th>${includeCategory ? '<th>Tipo</th>' : ''}<th>Mi participación</th><th>Estado</th><th>Versión</th><th>Actualización</th><th></th></tr></thead><tbody>
       ${docs.map(d => `<tr>
-        <td><strong>${escapeHtml(d.title)}</strong><br><span class="muted small">${escapeHtml(d.active_file_name || 'Sin archivo')}</span></td>
-        ${includeCategory ? `<td>${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[d.category] || d.category)}</td>` : ''}
-        <td>${myDocumentRoles(d.id).map(role => `<span class="pill soft">${escapeHtml(role)}</span>`).join(' ') || '<span class="muted small">Consulta</span>'}</td>
-        <td>${pill(d.status)}</td><td>v${d.current_version}</td><td>${fmtDate(d.updated_at)}</td>
-        <td><button class="secondary" data-open-document="${d.id}">Ver</button></td>
+        <td data-label="Documento"><strong>${escapeHtml(d.title)}</strong><br><span class="muted small">${escapeHtml(d.active_file_name || 'Sin archivo')}</span></td>
+        ${includeCategory ? `<td data-label="Tipo">${escapeHtml({contract:'Contrato',invoice:'Factura',other:'Otro'}[d.category] || d.category)}</td>` : ''}
+        <td data-label="Participación">${myDocumentRoles(d.id).map(role => `<span class="pill soft">${escapeHtml(role)}</span>`).join(' ') || '<span class="muted small">Consulta</span>'}</td>
+        <td data-label="Estado">${pill(d.status)}</td>
+        <td data-label="Versión">v${d.current_version}</td>
+        <td data-label="Actualización">${fmtDate(d.updated_at)}</td>
+        <td class="mobile-card-action"><button class="secondary" data-open-document="${d.id}">Abrir expediente</button></td>
       </tr>`).join('')}
     </tbody></table></div>`;
   }
@@ -1121,6 +1196,7 @@
 
     const totalAttention = taskCount + notificationCount + messageCount;
     document.title = totalAttention ? `(${totalAttention}) Lumen Sign` : 'Lumen Sign';
+    syncMobileBottomNavigation();
 
     const reminder = els['sidebar-reminder'];
     if (!reminder) return;
@@ -1335,6 +1411,7 @@
     qsa('.page-section').forEach(s => s.classList.add('hidden'));
     byId(`section-${section}`).classList.remove('hidden');
     qsa('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.section === section));
+    syncMobileBottomNavigation(section);
     const titles = {
       dashboard: ['Inicio', 'Lo que requiere tu atención'], documents: ['Mis documentos', 'Expedientes donde participas o que tú creaste'], history: ['Historial', 'Movimientos de tus expedientes'],
       'new-document': ['Crear documento', 'Asistente paso a paso'], tasks: ['Mis tareas', 'Solo se habilita la acción de tu turno'],
@@ -1823,6 +1900,9 @@
     ];
     const rank = { draft: 0, rejected: 0, awaiting_approval: 1, awaiting_signature: 2, paused: 2, completed: 3, cancelled: 3, expired: 3 };
     const currentRank = rank[doc.status] ?? 0;
+    const currentStepNumber = Math.min(currentRank + 1, processSteps.length);
+    const currentStepLabel = processSteps[Math.min(currentRank, processSteps.length - 1)]?.label || 'Proceso';
+    const processPercent = Math.round((currentStepNumber / processSteps.length) * 100);
     const track = processSteps.map((step, index) => `
       <div class="process-step ${index < currentRank ? 'done' : index === currentRank ? 'current' : 'blocked'}">
         <span>${index + 1}</span>
@@ -1946,12 +2026,18 @@
 
     const quickNav = `
       <nav class="document-quick-nav" aria-label="Navegación rápida del expediente">
-        <button type="button" data-scroll-document-section="document-summary-section">Resumen</button>
+        <button type="button" data-scroll-document-section="document-summary-section">
+          <span class="quick-nav-icon" aria-hidden="true">▦</span><span>Resumen</span>
+        </button>
         ${isCollaborativeReview
-          ? `<button type="button" class="discussion-nav-button ${blockingReviewComments.length ? 'attention' : ''}" data-focus-review="true">Revisión <span>${discussionCount}</span></button>`
-          : `<button type="button" data-document-chat="${doc.id}">Conversación</button>`}
-        <button type="button" data-scroll-document-section="document-flow-section">Participantes</button>
-        <button type="button" data-scroll-document-section="document-technical-section">Versiones e historial</button>
+          ? `<button type="button" class="discussion-nav-button ${blockingReviewComments.length ? 'attention' : ''}" data-focus-review="true"><span class="quick-nav-icon" aria-hidden="true">💬</span><span>Revisión</span><em>${discussionCount}</em></button>`
+          : `<button type="button" data-document-chat="${doc.id}"><span class="quick-nav-icon" aria-hidden="true">💬</span><span>Conversación</span></button>`}
+        <button type="button" data-scroll-document-section="document-flow-section">
+          <span class="quick-nav-icon" aria-hidden="true">◎</span><span class="desktop-quick-label">Participantes</span><span class="mobile-quick-label">Personas</span>
+        </button>
+        <button type="button" data-scroll-document-section="document-technical-section">
+          <span class="quick-nav-icon" aria-hidden="true">◷</span><span class="desktop-quick-label">Versiones e historial</span><span class="mobile-quick-label">Historial</span>
+        </button>
       </nav>`;
 
     const discussionDrawer = isCollaborativeReview ? `
@@ -1979,6 +2065,14 @@
             <small>${escapeHtml(dueLabel)}</small>
           </div>
         </div>
+        <button type="button" class="mobile-process-summary" data-toggle-mobile-process="true" aria-expanded="false">
+          <span>
+            <small>Paso ${currentStepNumber} de ${processSteps.length}</small>
+            <strong>${escapeHtml(currentStepLabel)}</strong>
+          </span>
+          <span class="mobile-process-meter" aria-hidden="true"><i style="width:${processPercent}%"></i></span>
+          <em>Ver proceso</em>
+        </button>
         <div class="process-track ux-process-track">${track}</div>
         <div class="ux-guidance">
           <div><strong>Qué sigue</strong><p>${escapeHtml(guidance)}</p></div>
@@ -3815,6 +3909,17 @@
     });
 
     document.addEventListener('click', async e => {
+      const mobileProcess = e.target.closest('[data-toggle-mobile-process]');
+      if (mobileProcess) {
+        e.preventDefault();
+        const hero = mobileProcess.closest('.ux-document-hero');
+        const expanded = !hero?.classList.contains('mobile-process-expanded');
+        hero?.classList.toggle('mobile-process-expanded', expanded);
+        mobileProcess.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        const label = mobileProcess.querySelector('em');
+        if (label) label.textContent = expanded ? 'Ocultar' : 'Ver proceso';
+        return;
+      }
       const focusReview = e.target.closest('[data-focus-review]'); if (focusReview) { e.preventDefault(); focusReviewWorkspace(); return; }
       const toggleReviewDrawer = e.target.closest('[data-toggle-review-drawer]'); if (toggleReviewDrawer) { e.preventDefault(); focusReviewWorkspace(); return; }
       const closeReviewDrawer = e.target.closest('[data-close-review-drawer]'); if (closeReviewDrawer) { e.preventDefault(); setReviewDrawerOpen(false); return; }
