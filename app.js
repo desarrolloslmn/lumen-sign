@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.4.1-cambio-contrasena-mfa';
+  const APP_VERSION = '8.4.2-cambio-contrasena-sin-revalidacion';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -3248,8 +3248,11 @@
     if (/AAL2 session is required/i.test(message)) {
       return 'Por seguridad, primero debes confirmar el código de tu aplicación autenticadora. Después podrás guardar la contraseña nueva.';
     }
+    if (/reauthentication_needed|reauthentication_not_valid/i.test(message)) {
+      return 'La sesión de seguridad venció. Cierra sesión, vuelve a ingresar y realiza el cambio inmediatamente.';
+    }
     if (/invalid login credentials/i.test(message)) {
-      return 'La contraseña temporal actual no es correcta.';
+      return 'No fue posible validar la sesión. Cierra sesión, vuelve a ingresar y realiza el cambio inmediatamente.';
     }
     if (/same password|different from the old|new password should be different/i.test(message)) {
       return 'La contraseña nueva debe ser diferente de la contraseña temporal.';
@@ -3262,13 +3265,34 @@
 
   function showForcePasswordDialog() {
     if (!els['force-password-dialog'] || !state.profile?.must_change_password) return;
+
     state.forcePasswordChangeActive = true;
     document.body.classList.add('password-change-required');
     ensureForcePasswordErrorElement();
     clearForcePasswordInlineError();
+
+    // La sesión ya fue autenticada con la contraseña temporal en el login.
+    // No volvemos a pedirla ni a validarla en un segundo cliente, porque esa
+    // comprobación redundante podía devolver "Invalid login credentials"
+    // aunque el acceso inicial hubiera sido correcto.
+    const currentPasswordInput = byId('force-current-password');
+    const currentPasswordLabel = currentPasswordInput?.closest('label');
+
+    if (currentPasswordInput) {
+      currentPasswordInput.required = false;
+      currentPasswordInput.disabled = true;
+      currentPasswordInput.value = '';
+      currentPasswordInput.setAttribute('aria-hidden', 'true');
+    }
+
+    if (currentPasswordLabel) {
+      currentPasswordLabel.hidden = true;
+      currentPasswordLabel.setAttribute('aria-hidden', 'true');
+    }
+
     if (!els['force-password-dialog'].open) {
       els['force-password-dialog'].showModal();
-      setTimeout(() => byId('force-current-password')?.focus(), 80);
+      setTimeout(() => byId('force-new-password')?.focus(), 80);
     }
   }
 
@@ -3545,35 +3569,37 @@
         throw new Error('Tu sesión no está lista. Cierra sesión e ingresa otra vez.');
       }
 
-      const currentPassword = byId('force-current-password').value;
-      const newPassword = byId('force-new-password').value;
-      const confirmation = byId('force-confirm-password').value;
+      const newPassword = byId('force-new-password')?.value || '';
+      const confirmation = byId('force-confirm-password')?.value || '';
 
-      if (!currentPassword) throw new Error('Escribe tu contraseña temporal actual.');
       if (!passwordMeetsSecurityPolicy(newPassword)) {
         throw new Error('La contraseña nueva debe tener mínimo 12 caracteres, mayúscula, minúscula, número y símbolo.');
       }
-      if (newPassword !== confirmation) throw new Error('La confirmación no coincide con la contraseña nueva.');
-      if (newPassword === currentPassword) throw new Error('La contraseña nueva no puede ser igual a la temporal.');
+      if (newPassword !== confirmation) {
+        throw new Error('La confirmación no coincide con la contraseña nueva.');
+      }
 
       setBusy(true);
 
-      const { data: aalData, error: aalError } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+      // Si el usuario ya tiene un factor MFA verificado, Supabase exige AAL2
+      // antes de permitir el cambio. Primero se confirma el autenticador.
+      const { data: aalData, error: aalError } =
+        await client.auth.mfa.getAuthenticatorAssuranceLevel();
       if (aalError) throw aalError;
 
       const verifiedFactors = await getVerifiedTotpFactors();
       if (verifiedFactors.length > 0 && aalData?.currentLevel !== 'aal2') {
         clearForcePasswordDialog();
         await startMfaVerification(verifiedFactors[0].id, 'password-change');
-        showMfaInlineError('verify', 'Confirma primero el código de tu autenticador. Después volverás automáticamente al cambio de contraseña.');
+        showMfaInlineError(
+          'verify',
+          'Confirma primero el código de tu autenticador. Después volverás automáticamente al cambio de contraseña.'
+        );
         return;
       }
 
-      await verifyCurrentPasswordWithoutReplacingSession(
-        state.session.user.email,
-        currentPassword
-      );
-
+      // La sesión actual ya demuestra que la contraseña temporal fue válida.
+      // Se actualiza directamente sin iniciar una segunda sesión de validación.
       const { error: updateError } = await client.auth.updateUser({
         password: newPassword
       });
@@ -3584,7 +3610,10 @@
       configureAppForProfile(true);
       clearForcePasswordDialog();
 
-      if (await enforceMfaForAll()) await loadProtectedAppData();
+      if (await enforceMfaForAll()) {
+        await loadProtectedAppData();
+      }
+
       toast('Contraseña actualizada. Tu acceso quedó protegido correctamente.');
     } catch (error) {
       console.error(error);

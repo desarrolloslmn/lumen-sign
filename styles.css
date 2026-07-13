@@ -1714,3 +1714,12 @@ body.review-drawer-open{
 @media(max-width:700px){
   .force-password-inline-error{margin-bottom:.8rem;padding:.8rem .9rem}
 }
+
+
+/* ==========================================================
+   Lumen Sign v8.4.2 — Cambio de contraseña
+   La contraseña temporal ya fue validada durante el login.
+   ========================================================== */
+#force-password-dialog label[hidden] {
+  display: none !important;
+}
