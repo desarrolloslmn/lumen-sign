@@ -657,7 +657,7 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
    - da más espacio real al PDF y al panel de campos.
    ============================================================ */
 @media (max-width: 760px){
-  #prepare-dialog.visual-dialog{
+  #prepare-dialog[open].visual-dialog{
     display:grid;
     grid-template-rows:auto minmax(0,1fr);
     width:100vw;
@@ -672,7 +672,7 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     overflow:hidden;
   }
 
-  #prepare-dialog .dialog-close{
+  #prepare-dialog[open] .dialog-close{
     position:fixed;
     top:.55rem;
     right:.55rem;
@@ -683,7 +683,7 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     box-shadow:0 10px 24px rgba(16,42,70,.12);
   }
 
-  #prepare-dialog .visual-header{
+  #prepare-dialog[open] .visual-header{
     display:block;
     min-height:0;
     margin:0 0 .55rem;
@@ -691,25 +691,25 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     overflow:visible;
   }
 
-  #prepare-dialog .visual-header .eyebrow{
+  #prepare-dialog[open] .visual-header .eyebrow{
     margin-bottom:.18rem;
     font-size:.68rem;
     letter-spacing:.13em;
   }
 
-  #prepare-dialog .visual-header h2{
+  #prepare-dialog[open] .visual-header h2{
     margin:0 0 .25rem;
     font-size:clamp(1.55rem,7vw,2rem);
     line-height:1.06;
   }
 
-  #prepare-dialog .visual-header p{
+  #prepare-dialog[open] .visual-header p{
     margin:0;
     font-size:.98rem;
     line-height:1.38;
   }
 
-  #prepare-dialog .visual-header .button-row{
+  #prepare-dialog[open] .visual-header .button-row{
     position:fixed;
     left:.72rem;
     right:.72rem;
@@ -727,7 +727,7 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     backdrop-filter:blur(14px);
   }
 
-  #prepare-dialog .visual-header .button-row button{
+  #prepare-dialog[open] .visual-header .button-row button{
     width:100%;
     min-height:46px;
     padding:.72rem .7rem;
@@ -736,12 +736,12 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     line-height:1.15;
   }
 
-  #prepare-dialog #prepare-save-submit{
+  #prepare-dialog[open] #prepare-save-submit{
     grid-column:1 / -1;
     order:-1;
   }
 
-  #prepare-dialog .visual-layout{
+  #prepare-dialog[open] .visual-layout{
     display:grid;
     grid-template-columns:1fr;
     grid-template-rows:minmax(185px,32dvh) minmax(0,1fr);
@@ -751,7 +751,7 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     overflow:hidden;
   }
 
-  #prepare-dialog .field-panel{
+  #prepare-dialog[open] .field-panel{
     min-height:0;
     max-height:none;
     overflow:auto;
@@ -760,34 +760,34 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     overscroll-behavior:contain;
   }
 
-  #prepare-dialog .field-step{
+  #prepare-dialog[open] .field-step{
     margin:.1rem 0 .45rem;
   }
 
-  #prepare-dialog .field-step span{
+  #prepare-dialog[open] .field-step span{
     width:31px;
     height:31px;
     border-radius:10px;
     font-size:.9rem;
   }
 
-  #prepare-dialog .field-panel label{
+  #prepare-dialog[open] .field-panel label{
     gap:.35rem;
     margin-bottom:.65rem;
   }
 
-  #prepare-dialog .field-panel input,
-  #prepare-dialog .field-panel select{
+  #prepare-dialog[open] .field-panel input,
+  #prepare-dialog[open] .field-panel select{
     min-height:44px;
     padding:.72rem .8rem;
   }
 
-  #prepare-dialog .pdf-workspace{
+  #prepare-dialog[open] .pdf-workspace{
     min-height:0;
     border-radius:16px;
   }
 
-  #prepare-dialog .pdf-toolbar{
+  #prepare-dialog[open] .pdf-toolbar{
     position:sticky;
     top:0;
     z-index:12;
@@ -799,7 +799,7 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     white-space:nowrap;
   }
 
-  #prepare-dialog .pdf-toolbar button{
+  #prepare-dialog[open] .pdf-toolbar button{
     flex:0 0 auto;
     width:auto!important;
     min-width:44px;
@@ -807,36 +807,36 @@ button.primary,button.secondary,button.danger{border-radius:12px}button.secondar
     padding:.55rem .72rem;
   }
 
-  #prepare-dialog .pdf-toolbar .toolbar-separator{
+  #prepare-dialog[open] .pdf-toolbar .toolbar-separator{
     flex:0 0 1px;
   }
 
-  #prepare-dialog .pdf-pages{
+  #prepare-dialog[open] .pdf-pages{
     padding:.55rem;
     overscroll-behavior:contain;
   }
 
-  #prepare-dialog .pdf-page{
+  #prepare-dialog[open] .pdf-page{
     margin-bottom:.8rem;
   }
 }
 
 @media (max-width: 420px){
-  #prepare-dialog.visual-dialog{
+  #prepare-dialog[open].visual-dialog{
     padding:.6rem .6rem calc(154px + env(safe-area-inset-bottom));
   }
 
-  #prepare-dialog .visual-header{
+  #prepare-dialog[open] .visual-header{
     padding-right:3rem;
   }
 
-  #prepare-dialog .visual-header .button-row{
+  #prepare-dialog[open] .visual-header .button-row{
     left:.6rem;
     right:.6rem;
     bottom:calc(.45rem + env(safe-area-inset-bottom));
   }
 
-  #prepare-dialog .visual-layout{
+  #prepare-dialog[open] .visual-layout{
     grid-template-rows:minmax(170px,31dvh) minmax(0,1fr);
   }
 }
@@ -2420,5 +2420,188 @@ body.review-drawer-open{
 
   .document-actions-menu{
     min-width:64px;
+  }
+}
+
+
+/* ============================================================
+   LUMEN SIGN v8.5.1 — Corrección de modales en móvil
+   ============================================================ */
+
+/*
+ * Regla crítica:
+ * un <dialog> cerrado nunca puede participar en el layout.
+ * La v8.5 aplicaba display:grid al modal de preparación incluso sin [open],
+ * anulando el comportamiento nativo y mostrando sus botones en otras vistas.
+ */
+dialog:not([open]){
+  display:none!important;
+}
+
+dialog[open]{
+  visibility:visible;
+}
+
+body.dialog-open{
+  overflow:hidden!important;
+  overscroll-behavior:none;
+}
+
+body.dialog-open #auth-view,
+body.dialog-open #app-view{
+  overscroll-behavior:none;
+}
+
+@media(max-width:760px){
+  #prepare-dialog[open].visual-dialog{
+    position:fixed;
+    inset:0;
+    z-index:3000;
+    display:flex;
+    flex-direction:column;
+    width:100vw;
+    max-width:100vw;
+    height:100dvh;
+    max-height:100dvh;
+    margin:0;
+    padding:.65rem .65rem calc(104px + env(safe-area-inset-bottom));
+    overflow:hidden;
+    border:0;
+    border-radius:0;
+    background:#fff;
+  }
+
+  #prepare-dialog[open]::backdrop{
+    background:rgba(7,18,31,.78);
+  }
+
+  #prepare-dialog[open] .dialog-close{
+    position:fixed;
+    top:calc(.5rem + env(safe-area-inset-top));
+    right:.55rem;
+    z-index:3050;
+    width:44px;
+    height:44px;
+  }
+
+  #prepare-dialog[open] .visual-header{
+    flex:0 0 auto;
+    margin:0 0 .5rem;
+    padding:calc(.1rem + env(safe-area-inset-top)) 3.15rem 0 0;
+  }
+
+  #prepare-dialog[open] .visual-header h2{
+    max-width:100%;
+    margin:.08rem 0 .2rem;
+    font-size:clamp(1.38rem,6.5vw,1.8rem);
+    line-height:1.05;
+  }
+
+  #prepare-dialog[open] .visual-header p{
+    display:-webkit-box;
+    overflow:hidden;
+    -webkit-box-orient:vertical;
+    -webkit-line-clamp:2;
+    font-size:.84rem;
+    line-height:1.32;
+  }
+
+  #prepare-dialog[open] .visual-layout{
+    flex:1 1 auto;
+    display:grid;
+    grid-template-columns:1fr;
+    grid-template-rows:minmax(150px,26dvh) minmax(300px,1fr);
+    gap:.5rem;
+    width:100%;
+    height:auto;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  #prepare-dialog[open] .field-panel{
+    min-height:0;
+    max-height:none;
+    overflow:auto;
+    padding:.7rem;
+    border-radius:14px;
+    -webkit-overflow-scrolling:touch;
+  }
+
+  #prepare-dialog[open] .field-help{
+    display:none;
+  }
+
+  #prepare-dialog[open] .placement-instruction{
+    padding:.6rem;
+  }
+
+  #prepare-dialog[open] .placement-instruction p{
+    display:none;
+  }
+
+  #prepare-dialog[open] .pdf-workspace{
+    min-height:300px;
+    border-radius:14px;
+  }
+
+  #prepare-dialog[open] .pdf-toolbar{
+    min-height:50px;
+    padding:.4rem;
+  }
+
+  #prepare-dialog[open] .pdf-pages{
+    padding:.42rem;
+  }
+
+  #prepare-dialog[open] .visual-header .button-row{
+    position:fixed;
+    left:.55rem;
+    right:.55rem;
+    bottom:calc(.4rem + env(safe-area-inset-bottom));
+    z-index:3040;
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:.38rem;
+    width:auto;
+    padding:.45rem;
+    border:1px solid #d7e2ed;
+    border-radius:16px;
+    background:rgba(255,255,255,.98);
+    box-shadow:0 -12px 30px rgba(9,25,45,.16);
+  }
+
+  #prepare-dialog[open] .visual-header .button-row button{
+    min-height:39px;
+    padding:.52rem .45rem;
+    border-radius:11px;
+    font-size:.76rem;
+    line-height:1.08;
+  }
+
+  #prepare-dialog[open] #prepare-save-submit{
+    grid-column:1/-1;
+    min-height:44px;
+    order:-1;
+    font-size:.82rem;
+  }
+
+  body:not(.prepare-dialog-open) #prepare-dialog .button-row,
+  body:not(.prepare-dialog-open) #prepare-dialog .visual-layout{
+    display:none!important;
+  }
+}
+
+@media(max-width:420px){
+  #prepare-dialog[open].visual-dialog{
+    padding:.5rem .5rem calc(100px + env(safe-area-inset-bottom));
+  }
+
+  #prepare-dialog[open] .visual-layout{
+    grid-template-rows:minmax(140px,24dvh) minmax(280px,1fr);
+  }
+
+  #prepare-dialog[open] .visual-header .button-row{
+    left:.4rem;
+    right:.4rem;
   }
 }

@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.5-experiencia-mobile-directores';
+  const APP_VERSION = '8.5.1-correccion-modal-mobile';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -461,12 +461,64 @@
     document.body.style.cursor = busy ? 'progress' : '';
   }
 
+  const securityDialogIds = new Set([
+    'force-password-dialog',
+    'mfa-setup-dialog',
+    'mfa-verify-dialog'
+  ]);
+
+  function closeOpenDialogs({ keepSecurity = false } = {}) {
+    qsa('dialog[open]').forEach(dialog => {
+      if (keepSecurity && securityDialogIds.has(dialog.id)) return;
+      try {
+        dialog.close();
+      } catch (error) {
+        console.warn('No se pudo cerrar el diálogo:', dialog.id, error);
+      }
+    });
+
+    if (!qsa('dialog[open]').length) {
+      document.body.classList.remove('dialog-open', 'prepare-dialog-open');
+    }
+  }
+
+  function syncDialogState() {
+    const openDialogs = qsa('dialog[open]');
+    document.body.classList.toggle('dialog-open', openDialogs.length > 0);
+    document.body.classList.toggle(
+      'prepare-dialog-open',
+      Boolean(byId('prepare-dialog')?.open)
+    );
+  }
+
+  function openExclusiveDialog(dialog) {
+    if (!dialog) return;
+
+    qsa('dialog[open]').forEach(openDialog => {
+      if (openDialog === dialog) return;
+      if (securityDialogIds.has(openDialog.id)) return;
+      try {
+        openDialog.close();
+      } catch (error) {
+        console.warn('No se pudo cerrar el diálogo anterior:', openDialog.id, error);
+      }
+    });
+
+    if (!dialog.open) dialog.showModal();
+    syncDialogState();
+  }
+
   function showAuth() {
+    closeOpenDialogs();
+    closeMobileMenu();
     els['auth-view'].classList.remove('hidden');
     els['app-view'].classList.add('hidden');
+    byId('mobile-bottom-nav')?.classList.add('hidden');
   }
 
   function showApp() {
+    closeOpenDialogs({ keepSecurity: true });
+    closeMobileMenu();
     els['auth-view'].classList.add('hidden');
     els['app-view'].classList.remove('hidden');
   }
@@ -1406,6 +1458,7 @@
   }
 
   function navigate(section) {
+    closeOpenDialogs({ keepSecurity: true });
     if (!isActive() && ['new-document','tasks','documents','history','dashboard','messages','notifications'].includes(section)) section = 'profile';
     if (section === 'new-document' && !canStartProcess()) section = 'dashboard';
     qsa('.page-section').forEach(s => s.classList.add('hidden'));
@@ -2715,7 +2768,9 @@
       els['field-assignee'].innerHTML = options;
       els['selected-field-assignee'].innerHTML = options;
       els['prepare-page-count'].textContent = String(pdf.numPages);
-      els['prepare-dialog'].showModal();
+      openExclusiveDialog(els['prepare-dialog']);
+      els['prepare-dialog'].scrollTop = 0;
+      els['prepare-pages'].scrollTop = 0;
       await renderPreparePage();
     });
   }
@@ -2870,6 +2925,7 @@
         if (response.error) throw response.error;
       }
       els['prepare-dialog'].close();
+      syncDialogState();
       await refreshData();
     }, submit ? 'Posiciones guardadas y proceso iniciado.' : 'Posiciones de firma guardadas.');
   }
@@ -3787,6 +3843,18 @@
   }
 
   function bindEvents() {
+    qsa('dialog').forEach(dialog => {
+      dialog.addEventListener('close', () => {
+        if (dialog.id === 'prepare-dialog') {
+          document.body.classList.remove('prepare-dialog-open');
+        }
+        syncDialogState();
+      });
+
+      dialog.addEventListener('cancel', () => {
+        setTimeout(syncDialogState, 0);
+      });
+    });
     qsa('[data-auth-tab]').forEach(btn => btn.addEventListener('click', () => switchAuthTab(btn.dataset.authTab)));
     els['login-form'].addEventListener('submit', async e => {
       e.preventDefault();
