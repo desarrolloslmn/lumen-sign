@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.4.0-flujo-simple-permisos';
+  const APP_VERSION = '8.4.1-cambio-contrasena-mfa';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -548,7 +548,7 @@
     const userId = session.user.id;
     if (!force && state.loadedUserId === userId && state.profile) {
       showApp();
-      if (state.profile?.must_change_password) { showForcePasswordDialog(); return; }
+      if (state.profile?.must_change_password) { await prepareForcedPasswordChange(); return; }
       if (!(await enforceMfaForAll())) return;
       return;
     }
@@ -556,7 +556,7 @@
     state.sessionLoadPromise = (async () => {
       stopLiveSync();
       await loadProfile(); showApp(); configureAppForProfile();
-      if (state.profile?.must_change_password) { showForcePasswordDialog(); state.loadedUserId = userId; return; }
+      if (state.profile?.must_change_password) { await prepareForcedPasswordChange(); state.loadedUserId = userId; return; }
       if (!(await enforceMfaForAll())) { state.loadedUserId = userId; return; }
       await loadProtectedAppData();
     })();
@@ -3206,10 +3206,66 @@
       && /[^A-Za-z0-9]/.test(value);
   }
 
+  function ensureForcePasswordErrorElement() {
+    let box = byId('force-password-error');
+    if (box) return box;
+
+    const form = byId('force-password-form');
+    if (!form) return null;
+
+    box = document.createElement('div');
+    box.id = 'force-password-error';
+    box.className = 'force-password-inline-error hidden';
+    box.setAttribute('role', 'alert');
+    box.setAttribute('aria-live', 'assertive');
+
+    const firstLabel = byId('force-current-password')?.closest('label');
+    if (firstLabel) firstLabel.insertAdjacentElement('beforebegin', box);
+    else form.prepend(box);
+    return box;
+  }
+
+  function clearForcePasswordInlineError() {
+    const box = ensureForcePasswordErrorElement();
+    if (!box) return;
+    box.textContent = '';
+    box.classList.add('hidden');
+  }
+
+  function showForcePasswordInlineError(message) {
+    const box = ensureForcePasswordErrorElement();
+    if (!box) {
+      toast(message, true);
+      return;
+    }
+    box.textContent = message;
+    box.classList.remove('hidden');
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function passwordChangeFriendlyError(error) {
+    const message = String(error?.message || error || 'No fue posible cambiar la contraseña.');
+    if (/AAL2 session is required/i.test(message)) {
+      return 'Por seguridad, primero debes confirmar el código de tu aplicación autenticadora. Después podrás guardar la contraseña nueva.';
+    }
+    if (/invalid login credentials/i.test(message)) {
+      return 'La contraseña temporal actual no es correcta.';
+    }
+    if (/same password|different from the old|new password should be different/i.test(message)) {
+      return 'La contraseña nueva debe ser diferente de la contraseña temporal.';
+    }
+    if (/password/i.test(message) && /weak|length|characters/i.test(message)) {
+      return 'La contraseña nueva no cumple la política de seguridad.';
+    }
+    return message;
+  }
+
   function showForcePasswordDialog() {
     if (!els['force-password-dialog'] || !state.profile?.must_change_password) return;
     state.forcePasswordChangeActive = true;
     document.body.classList.add('password-change-required');
+    ensureForcePasswordErrorElement();
+    clearForcePasswordInlineError();
     if (!els['force-password-dialog'].open) {
       els['force-password-dialog'].showModal();
       setTimeout(() => byId('force-current-password')?.focus(), 80);
@@ -3219,8 +3275,27 @@
   function clearForcePasswordDialog() {
     state.forcePasswordChangeActive = false;
     document.body.classList.remove('password-change-required');
+    clearForcePasswordInlineError();
     byId('force-password-form')?.reset();
     if (els['force-password-dialog']?.open) els['force-password-dialog'].close();
+  }
+
+  async function prepareForcedPasswordChange() {
+    if (!state.profile?.must_change_password) return true;
+
+    const { data, error } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error) throw error;
+
+    const verifiedFactors = await getVerifiedTotpFactors();
+
+    if (verifiedFactors.length > 0 && data?.currentLevel !== 'aal2') {
+      clearForcePasswordDialog();
+      await startMfaVerification(verifiedFactors[0].id, 'password-change');
+      return false;
+    }
+
+    showForcePasswordDialog();
+    return true;
   }
 
   function normalizeMfaCode(value) {
@@ -3270,11 +3345,11 @@
     showMfaSetupDialog(data);
   }
 
-  async function startMfaVerification(factorId) {
+  async function startMfaVerification(factorId, context = 'app-access') {
     const { data, error } = await client.auth.mfa.challenge({ factorId });
     if (error) throw error;
 
-    state.mfa = { factorId, challengeId: data.id, mode: 'verify', enrollment: null };
+    state.mfa = { factorId, challengeId: data.id, mode: 'verify', enrollment: null, context };
     showMfaVerifyDialog();
   }
 
@@ -3319,9 +3394,17 @@
   }
 
   async function finishMfaAndLoadApp() {
+    const context = state.mfa?.context || 'app-access';
     const { data } = await client.auth.getSession();
     state.session = data.session || state.session;
     clearMfaDialogs();
+
+    if (state.profile?.must_change_password || context === 'password-change') {
+      showForcePasswordDialog();
+      toast('Identidad verificada. Ahora crea tu contraseña privada.');
+      return;
+    }
+
     await loadProtectedAppData();
     toast('Doble factor verificado. Acceso autorizado.');
   }
@@ -3402,7 +3485,7 @@
 
     try {
       setBusy(true);
-      await startMfaVerification(state.mfa.factorId);
+      await startMfaVerification(state.mfa.factorId, state.mfa.context || 'app-access');
       toast('Código renovado. Escribe el código actual de tu app.');
     } catch (error) {
       console.error(error);
@@ -3434,32 +3517,65 @@
     if (updateError) throw updateError;
   }
 
+  async function verifyCurrentPasswordWithoutReplacingSession(email, password) {
+    const verifier = window.supabase.createClient(cfg.supabaseUrl, cfg.supabasePublishableKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        storageKey: `lumen-password-check-${crypto.randomUUID()}`
+      }
+    });
+
+    try {
+      const { error } = await verifier.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    } finally {
+      try { await verifier.auth.signOut({ scope: 'local' }); }
+      catch (error) { console.warn('No se pudo cerrar la sesión temporal de validación.', error); }
+    }
+  }
+
   async function completeForcedPasswordChange(event) {
     event.preventDefault();
+    clearForcePasswordInlineError();
 
-    if (!state.session?.user?.email) throw new Error('Tu sesión no está lista. Cierra sesión e ingresa otra vez.');
+    try {
+      if (!state.session?.user?.email) {
+        throw new Error('Tu sesión no está lista. Cierra sesión e ingresa otra vez.');
+      }
 
-    const currentPassword = byId('force-current-password').value;
-    const newPassword = byId('force-new-password').value;
-    const confirmation = byId('force-confirm-password').value;
+      const currentPassword = byId('force-current-password').value;
+      const newPassword = byId('force-new-password').value;
+      const confirmation = byId('force-confirm-password').value;
 
-    if (!currentPassword) throw new Error('Escribe tu contraseña temporal actual.');
-    if (!passwordMeetsSecurityPolicy(newPassword)) {
-      throw new Error('La contraseña nueva debe tener mínimo 12 caracteres, mayúscula, minúscula, número y símbolo.');
-    }
-    if (newPassword !== confirmation) throw new Error('La confirmación no coincide con la contraseña nueva.');
-    if (newPassword === currentPassword) throw new Error('La contraseña nueva no puede ser igual a la temporal.');
+      if (!currentPassword) throw new Error('Escribe tu contraseña temporal actual.');
+      if (!passwordMeetsSecurityPolicy(newPassword)) {
+        throw new Error('La contraseña nueva debe tener mínimo 12 caracteres, mayúscula, minúscula, número y símbolo.');
+      }
+      if (newPassword !== confirmation) throw new Error('La confirmación no coincide con la contraseña nueva.');
+      if (newPassword === currentPassword) throw new Error('La contraseña nueva no puede ser igual a la temporal.');
 
-    await run(async () => {
-      const { error: reauthError } = await client.auth.signInWithPassword({
-        email: state.session.user.email,
-        password: currentPassword
-      });
-      if (reauthError) throw new Error('La contraseña temporal actual no es correcta.');
+      setBusy(true);
+
+      const { data: aalData, error: aalError } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (aalError) throw aalError;
+
+      const verifiedFactors = await getVerifiedTotpFactors();
+      if (verifiedFactors.length > 0 && aalData?.currentLevel !== 'aal2') {
+        clearForcePasswordDialog();
+        await startMfaVerification(verifiedFactors[0].id, 'password-change');
+        showMfaInlineError('verify', 'Confirma primero el código de tu autenticador. Después volverás automáticamente al cambio de contraseña.');
+        return;
+      }
+
+      await verifyCurrentPasswordWithoutReplacingSession(
+        state.session.user.email,
+        currentPassword
+      );
 
       const { error: updateError } = await client.auth.updateUser({
-        password: newPassword,
-        current_password: currentPassword
+        password: newPassword
       });
       if (updateError) throw updateError;
 
@@ -3467,8 +3583,15 @@
       await loadProfile();
       configureAppForProfile(true);
       clearForcePasswordDialog();
+
       if (await enforceMfaForAll()) await loadProtectedAppData();
-    }, 'Contraseña actualizada. Configura o verifica tu doble factor para continuar.');
+      toast('Contraseña actualizada. Tu acceso quedó protegido correctamente.');
+    } catch (error) {
+      console.error(error);
+      showForcePasswordInlineError(passwordChangeFriendlyError(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
 

@@ -28,7 +28,7 @@ button.primary,button.secondary,button.danger{border-radius:10px;padding:.78rem 
 .next-action{display:grid;grid-template-columns:1fr auto;align-items:center;gap:1.2rem;padding:1.35rem 1.5rem;margin-bottom:1rem;border-radius:18px;color:white;background:linear-gradient(135deg,var(--primary),#0d6f8f);box-shadow:0 15px 35px rgba(21,63,115,.2)}.next-action h2{margin:.15rem 0 .4rem}.next-action p{margin:0;color:rgba(255,255,255,.78)}.next-action button{background:white;color:var(--primary);border:0}.next-action.neutral{color:var(--ink);background:white;border:1px solid var(--line);box-shadow:var(--shadow)}.next-action.neutral p{color:var(--muted)}.next-action.neutral button{background:var(--primary);color:white}
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.two-column{display:grid;grid-template-columns:minmax(300px,.82fr) minmax(400px,1.18fr);gap:1rem;align-items:start}.toolbar,.button-row{display:flex;gap:.7rem;align-items:center}.toolbar input{min-width:230px}.checkbox-row{display:flex;align-items:center;gap:.6rem}.checkbox-row input{width:auto}.profile-history{margin-top:1rem}
 .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:.9rem .72rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}th{color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.06em}tbody tr:hover{background:#fafcfe}.row-actions{display:flex;flex-wrap:wrap;gap:.45rem}.row-actions button{padding:.48rem .66rem;font-size:.84rem}
-.pill{display:inline-flex;align-items:center;border-radius:999px;padding:.32rem .68rem;font-size:.76rem;font-weight:850;background:#e9eef4;color:#33475b}.pill.success{color:var(--success);background:var(--success-soft)}.pill.warning{color:var(--warning);background:var(--warning-soft)}.pill.danger{color:var(--danger);background:#ffebe8}.empty{text-align:center;color:var(--muted);padding:2.2rem}.toast{position:fixed;z-index:2000;right:1rem;bottom:1rem;max-width:440px;background:#16283a;color:white;border-radius:11px;padding:.95rem 1rem;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transform:translateY(10px);transition:.2s}.toast.show{opacity:1;transform:translateY(0)}.toast.error{background:#8a1c15}
+.pill{display:inline-flex;align-items:center;border-radius:999px;padding:.32rem .68rem;font-size:.76rem;font-weight:850;background:#e9eef4;color:#33475b}.pill.success{color:var(--success);background:var(--success-soft)}.pill.warning{color:var(--warning);background:var(--warning-soft)}.pill.danger{color:var(--danger);background:#ffebe8}.empty{text-align:center;color:var(--muted);padding:2.2rem}.toast{position:fixed;z-index:10000;right:1rem;bottom:1rem;max-width:440px;background:#16283a;color:white;border-radius:11px;padding:.95rem 1rem;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transform:translateY(10px);transition:.2s}.toast.show{opacity:1;transform:translateY(0)}.toast.error{background:#8a1c15}
 
 /* Tareas */
 .task-list{display:grid;gap:.85rem}.task-card{display:grid;grid-template-columns:auto 1fr auto;gap:1rem;align-items:center;padding:1.1rem 1.2rem;background:white;border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}.task-card.actionable{border-color:#9dc2e7;box-shadow:0 12px 30px rgba(21,63,115,.12)}.task-badge{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary);font-weight:900}.task-card h3{margin:0 0 .25rem}.task-meta{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.55rem}.task-wait{font-size:.82rem;color:var(--muted)}
@@ -1688,4 +1688,29 @@ body.review-drawer-open{
   .review-deadline-badge{padding:.7rem}
   .review-comments-list{gap:.7rem}
   .review-comment-card{padding:.8rem}
+}
+
+
+/* ============================================================
+   LUMEN SIGN v8.4.1 — Cambio de contraseña con MFA
+   ============================================================ */
+.force-password-inline-error{
+  margin:0 0 1rem;
+  padding:.9rem 1rem;
+  border:1px solid #f0a69d;
+  border-left:5px solid #9a241b;
+  border-radius:12px;
+  background:#fff0ee;
+  color:#7f1d16;
+  font-weight:750;
+  line-height:1.45;
+  overflow-wrap:anywhere;
+}
+.force-password-inline-error.hidden{display:none!important}
+.force-password-dialog[open]{z-index:9000}
+.mfa-setup-dialog[open],.mfa-verify-dialog[open]{z-index:9200}
+.password-change-required .force-password-dialog form{min-width:0}
+.password-change-required .force-password-dialog input{max-width:100%;min-width:0}
+@media(max-width:700px){
+  .force-password-inline-error{margin-bottom:.8rem;padding:.8rem .9rem}
 }
