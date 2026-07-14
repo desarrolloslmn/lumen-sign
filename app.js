@@ -18,9 +18,10 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.5.2-preproduccion-segura';
+  const APP_VERSION = '8.5.3-recuperacion-administrativa-simple';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
-  const PASSWORD_RECOVERY_MESSAGE = 'Por seguridad, la recuperación por correo está desactivada. Solicita al superadministrador verificar tu identidad y restablecer el acceso.';
+  const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
+  const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -47,7 +48,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
+    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -66,6 +67,7 @@
     if (input) input.value = String(value);
   }
   const isAdmin = () => ['superadmin', 'admin'].includes(state.profile?.role);
+  const isSuperAdmin = () => state.profile?.role === 'superadmin';
   const isContracts = () => state.profile?.role === 'contracts';
   const isActive = () => state.profile?.status === 'active';
   const canStartProcess = () => isActive() && (isAdmin() || isContracts());
@@ -121,6 +123,9 @@
       els['reset-request-form']?.classList.add('hidden');
       els['reset-confirm-form']?.classList.add('hidden');
     }
+
+    ensureAccessRecoveryUi();
+    ensureAdminRecoveryUi();
   }
 
   function toast(message, error = false) {
@@ -128,6 +133,268 @@
     els.toast.className = `toast show${error ? ' error' : ''}`;
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => els.toast.className = 'toast', 3800);
+  }
+
+
+  function ensureAccessRecoveryUi() {
+    if (!byId('access-recovery-dialog')) {
+      const dialog = document.createElement('dialog');
+      dialog.id = 'access-recovery-dialog';
+      dialog.className = 'access-recovery-dialog';
+      dialog.innerHTML = `
+        <button type="button" class="dialog-close" data-close-access-recovery aria-label="Cerrar">×</button>
+        <form id="access-recovery-form" class="stack">
+          <div>
+            <p class="eyebrow dark">Recuperar acceso</p>
+            <h2>Solicitar acceso temporal</h2>
+            <p class="muted">El superadministrador recibirá una notificación. Por seguridad, la contraseña no se enviará por correo.</p>
+          </div>
+          <label>Correo corporativo
+            <input id="access-recovery-email" type="email" autocomplete="email" maxlength="180" required placeholder="nombre@lumen.com.mx">
+          </label>
+          <label>Motivo
+            <select id="access-recovery-reason" required>
+              <option value="forgot_password">Olvidé mi contraseña</option>
+              <option value="lost_authenticator">Perdí acceso al autenticador</option>
+              <option value="cannot_access">No puedo acceder</option>
+            </select>
+          </label>
+          <div id="access-recovery-feedback" class="security-access-box compact hidden" role="status" aria-live="polite"></div>
+          <button class="primary large" type="submit">Enviar solicitud</button>
+          <p class="hint">El superadministrador debe confirmar tu identidad antes de generar el acceso.</p>
+        </form>`;
+      document.body.appendChild(dialog);
+    }
+
+    if (!byId('temporary-access-dialog')) {
+      const dialog = document.createElement('dialog');
+      dialog.id = 'temporary-access-dialog';
+      dialog.className = 'temporary-access-dialog';
+      dialog.innerHTML = `
+        <button type="button" class="dialog-close" data-close-temporary-access aria-label="Cerrar">×</button>
+        <div class="stack">
+          <div>
+            <p class="eyebrow dark">Acceso restablecido</p>
+            <h2>Contraseña temporal generada</h2>
+            <p class="muted">Se muestra una sola vez. Entrégala por llamada, Teams verificado o de forma presencial.</p>
+          </div>
+          <div class="temporary-access-result">
+            <span>Correo</span>
+            <strong id="temporary-access-email"></strong>
+            <span>Contraseña temporal</span>
+            <code id="temporary-access-password"></code>
+          </div>
+          <button id="copy-temporary-access" class="primary large" type="button">Copiar contraseña</button>
+          <div class="security-access-box compact">
+            <div class="security-access-icon">🔐</div>
+            <div><strong>Qué debe hacer la persona</strong><p>Ingresar, crear una contraseña privada y registrar nuevamente su autenticador.</p></div>
+          </div>
+        </div>`;
+      document.body.appendChild(dialog);
+    }
+
+    els['access-recovery-dialog'] = byId('access-recovery-dialog');
+    els['access-recovery-form'] = byId('access-recovery-form');
+    els['access-recovery-email'] = byId('access-recovery-email');
+    els['access-recovery-reason'] = byId('access-recovery-reason');
+    els['access-recovery-feedback'] = byId('access-recovery-feedback');
+    els['temporary-access-dialog'] = byId('temporary-access-dialog');
+  }
+
+  function ensureAdminRecoveryUi() {
+    const section = byId('section-admin');
+    if (!section || byId('access-recovery-admin-panel')) return;
+
+    const panel = document.createElement('section');
+    panel.id = 'access-recovery-admin-panel';
+    panel.className = 'panel access-recovery-admin-panel';
+    panel.innerHTML = `
+      <div class="panel-header wrap">
+        <div>
+          <p class="eyebrow dark">Accesos</p>
+          <h2>Solicitudes de recuperación</h2>
+          <p class="muted small">Confirma la identidad por un canal independiente antes de generar una contraseña temporal.</p>
+        </div>
+        <button id="refresh-access-recovery" class="secondary" type="button">Actualizar</button>
+      </div>
+      <div id="access-recovery-admin-list"><div class="empty">No hay solicitudes pendientes.</div></div>`;
+
+    const guide = section.querySelector('.admin-guide');
+    if (guide) guide.insertAdjacentElement('afterend', panel);
+    else section.prepend(panel);
+
+    const adminNav = els['admin-nav'] || byId('admin-nav');
+    if (adminNav && !byId('access-recovery-badge')) {
+      const badge = document.createElement('b');
+      badge.id = 'access-recovery-badge';
+      badge.className = 'nav-badge hidden';
+      badge.textContent = '0';
+      adminNav.appendChild(badge);
+    }
+
+    els['access-recovery-admin-panel'] = panel;
+    els['access-recovery-admin-list'] = byId('access-recovery-admin-list');
+    els['refresh-access-recovery'] = byId('refresh-access-recovery');
+  }
+
+  function openAccessRecoveryDialog() {
+    ensureAccessRecoveryUi();
+    const loginEmail = byId('login-email')?.value?.trim() || '';
+    if (els['access-recovery-email']) els['access-recovery-email'].value = loginEmail;
+    if (els['access-recovery-feedback']) {
+      els['access-recovery-feedback'].textContent = '';
+      els['access-recovery-feedback'].classList.add('hidden');
+    }
+    openExclusiveDialog(els['access-recovery-dialog']);
+    setTimeout(() => els['access-recovery-email']?.focus(), 80);
+  }
+
+  async function submitAccessRecoveryRequest(event) {
+    event.preventDefault();
+    const email = els['access-recovery-email']?.value?.trim().toLowerCase() || '';
+    const reason = els['access-recovery-reason']?.value || 'cannot_access';
+    if (!email) return;
+
+    const button = event.submitter || event.target.querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    try {
+      const { data, error } = await client.rpc('request_access_recovery', {
+        p_email: email,
+        p_reason: reason
+      });
+      if (error) throw error;
+      const feedback = els['access-recovery-feedback'];
+      if (feedback) {
+        feedback.innerHTML = '<div class="security-access-icon">✓</div><div><strong>Solicitud registrada</strong><p>El superadministrador revisará el acceso. La respuesta es la misma exista o no la cuenta.</p></div>';
+        feedback.classList.remove('hidden');
+      }
+      event.target.reset();
+      setTimeout(() => {
+        if (els['access-recovery-dialog']?.open) els['access-recovery-dialog'].close();
+      }, 2200);
+    } catch (error) {
+      console.error(error);
+      toast('No fue posible registrar la solicitud. Intenta nuevamente en unos minutos.', true);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function loadAccessRecoveryRequests() {
+    if (!isSuperAdmin()) {
+      state.accessRecoveryRequests = [];
+      return;
+    }
+    const { data, error } = await client.from('access_recovery_requests')
+      .select('id,user_id,email,full_name,reason,status,requested_at,handled_at,handled_by,action_taken')
+      .eq('status', 'pending')
+      .order('requested_at', { ascending: true });
+    if (error) throw error;
+    state.accessRecoveryRequests = data || [];
+  }
+
+  function recoveryReasonLabel(reason) {
+    return ({
+      forgot_password: 'Olvidó su contraseña',
+      lost_authenticator: 'Perdió el autenticador',
+      cannot_access: 'No puede acceder'
+    })[reason] || 'No puede acceder';
+  }
+
+  function renderAccessRecoveryRequests() {
+    ensureAdminRecoveryUi();
+    const panel = els['access-recovery-admin-panel'];
+    if (!panel) return;
+    panel.classList.toggle('hidden', !isSuperAdmin());
+
+    const list = state.accessRecoveryRequests || [];
+    const badge = byId('access-recovery-badge');
+    if (badge) {
+      badge.textContent = list.length > 99 ? '99+' : String(list.length);
+      badge.classList.toggle('hidden', list.length === 0);
+    }
+
+    if (!isSuperAdmin()) return;
+    els['access-recovery-admin-list'].innerHTML = list.length ? `
+      <div class="access-recovery-list">
+        ${list.map(item => `
+          <article class="access-recovery-card">
+            <div class="access-recovery-copy">
+              <span class="pill warning">Pendiente</span>
+              <h3>${escapeHtml(item.full_name || 'Usuario registrado')}</h3>
+              <p><strong>${escapeHtml(item.email)}</strong></p>
+              <p>${escapeHtml(recoveryReasonLabel(item.reason))}</p>
+              <time>${fmtDate(item.requested_at)}</time>
+            </div>
+            <div class="access-recovery-actions">
+              <button class="primary" type="button" data-handle-access-recovery="${item.id}">Generar acceso temporal</button>
+              <button class="danger" type="button" data-reject-access-recovery="${item.id}">Rechazar</button>
+            </div>
+          </article>`).join('')}
+      </div>` : '<div class="empty">No hay solicitudes pendientes.</div>';
+  }
+
+  async function handleAccessRecovery(requestId) {
+    if (!isSuperAdmin()) throw new Error('Solo el superadministrador puede restablecer accesos.');
+    const request = state.accessRecoveryRequests.find(item => String(item.id) === String(requestId));
+    if (!request) throw new Error('La solicitud ya no está disponible.');
+
+    const confirmed = confirm(`Antes de continuar, confirma que verificaste la identidad de ${request.full_name || request.email} por llamada, Teams verificado o de forma presencial.\n\nSe generará una contraseña temporal y se reiniciará su autenticador.`);
+    if (!confirmed) return;
+
+    await run(async () => {
+      const { data, error } = await client.functions.invoke(ADMIN_RECOVERY_FUNCTION, {
+        body: { requestId: Number(requestId) }
+      });
+      if (error) throw error;
+      if (!data?.ok || !data?.temporary_password) {
+        throw new Error(data?.error || 'La función no devolvió una contraseña temporal.');
+      }
+
+      byId('temporary-access-email').textContent = data.email || request.email;
+      byId('temporary-access-password').textContent = data.temporary_password;
+      byId('temporary-access-password').dataset.password = data.temporary_password;
+      openExclusiveDialog(els['temporary-access-dialog']);
+
+      await Promise.all([loadAccessRecoveryRequests(), loadNotifications(), loadProfiles()]);
+      renderAccessRecoveryRequests();
+      renderNotifications();
+      renderAdminUsers();
+    }, 'Acceso temporal generado.');
+  }
+
+  async function rejectAccessRecovery(requestId) {
+    if (!isSuperAdmin()) throw new Error('Solo el superadministrador puede rechazar solicitudes.');
+    if (!confirm('¿Rechazar esta solicitud de recuperación?')) return;
+
+    await run(async () => {
+      const { error } = await client.rpc('superadmin_reject_access_recovery', {
+        p_request_id: Number(requestId)
+      });
+      if (error) throw error;
+      await Promise.all([loadAccessRecoveryRequests(), loadNotifications()]);
+      renderAccessRecoveryRequests();
+      renderNotifications();
+    }, 'Solicitud rechazada.');
+  }
+
+  async function copyTemporaryAccessPassword() {
+    const password = byId('temporary-access-password')?.dataset.password || '';
+    if (!password) return;
+    try {
+      await navigator.clipboard.writeText(password);
+      toast('Contraseña temporal copiada.');
+    } catch {
+      const input = document.createElement('textarea');
+      input.value = password;
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      input.remove();
+      toast('Contraseña temporal copiada.');
+    }
   }
 
 
@@ -604,7 +871,7 @@
     await Promise.all([
       loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(),
       loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(),
-      loadEmailSystemStatus(), loadAdminDashboard()
+      loadEmailSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()
     ]);
     renderAll();
     startLiveSync();
@@ -615,7 +882,7 @@
     state.session = session;
     if (!session) {
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
-      state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null;
+      state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null; state.accessRecoveryRequests = [];
       clearForcePasswordDialog(); clearMfaDialogs(); stopLiveSync();
       showAuth(); return;
     }
@@ -1148,6 +1415,7 @@
     renderConversations();
     updateUnreadBadges();
     if (isAdmin()) { renderAdminUsers(); renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); }
+    renderAccessRecoveryRequests();
   }
 
   function renderDashboard() {
@@ -1306,6 +1574,7 @@
     if (kind === 'document_signature') return '✍';
     if (kind === 'document_rejected') return '!';
     if (kind === 'document_completed') return '✓';
+    if (kind === 'access_recovery') return '🔐';
     return '🔔';
   }
 
@@ -1319,7 +1588,11 @@
           <p>${escapeHtml(item.body)}</p>
           <time>${fmtDate(item.created_at)}</time>
         </div>
-        ${item.document_id ? `<button class="secondary" data-open-notification="${item.id}" data-notification-document="${item.document_id}">Abrir documento</button>` : `<button class="secondary" data-read-notification="${item.id}">${item.read_at ? 'Leída' : 'Marcar leída'}</button>`}
+        ${item.kind === 'access_recovery' && isSuperAdmin()
+          ? `<button class="primary" data-open-access-recovery="${item.id}">Atender solicitud</button>`
+          : item.document_id
+            ? `<button class="secondary" data-open-notification="${item.id}" data-notification-document="${item.document_id}">Abrir documento</button>`
+            : `<button class="secondary" data-read-notification="${item.id}">${item.read_at ? 'Leída' : 'Marcar leída'}</button>`}
       </article>
     `).join('') : '<div class="panel empty">No tienes notificaciones.</div>';
     updateUnreadBadges();
@@ -1501,7 +1774,7 @@
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
     if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
     if (section === 'history') renderDocumentHistory();
-    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadAdminDashboard(), loadTemplates()]).then(() => { renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); }).catch(error => toast(error.message, true)); }
+    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadAdminDashboard(), loadTemplates(), loadAccessRecoveryRequests()]).then(() => { renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); renderAccessRecoveryRequests(); }).catch(error => toast(error.message, true)); }
   }
 
   function allowedRolesForParticipant(role) {
@@ -3353,7 +3626,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()]);
     renderAll();
   }
 
@@ -3898,10 +4171,18 @@
     }
     els['forgot-password'].addEventListener('click', () => {
       if (!ALLOW_EMAIL_PASSWORD_RESET) {
-        toast(PASSWORD_RECOVERY_MESSAGE, true);
+        openAccessRecoveryDialog();
         return;
       }
       showResetPanel(byId('login-email').value.trim());
+    });
+    els['access-recovery-form']?.addEventListener('submit', submitAccessRecoveryRequest);
+    byId('copy-temporary-access')?.addEventListener('click', copyTemporaryAccessPassword);
+    els['refresh-access-recovery']?.addEventListener('click', async () => {
+      await run(async () => {
+        await loadAccessRecoveryRequests();
+        renderAccessRecoveryRequests();
+      }, 'Solicitudes actualizadas.');
     });
     els['reset-back-login'].addEventListener('click', () => switchAuthTab('login'));
     els['reset-request-form'].addEventListener('submit', async event => {
@@ -4022,6 +4303,17 @@
       const toggleReviewDrawer = e.target.closest('[data-toggle-review-drawer]'); if (toggleReviewDrawer) { e.preventDefault(); focusReviewWorkspace(); return; }
       const closeReviewDrawer = e.target.closest('[data-close-review-drawer]'); if (closeReviewDrawer) { e.preventDefault(); setReviewDrawerOpen(false); return; }
       const scrollSection = e.target.closest('[data-scroll-document-section]'); if (scrollSection) { e.preventDefault(); scrollDocumentDetailSection(scrollSection.dataset.scrollDocumentSection); return; }
+      const closeRecovery = e.target.closest('[data-close-access-recovery]'); if (closeRecovery) { els['access-recovery-dialog']?.close(); return; }
+      const closeTemporary = e.target.closest('[data-close-temporary-access]'); if (closeTemporary) { if (byId('temporary-access-password')) { byId('temporary-access-password').textContent = ''; byId('temporary-access-password').dataset.password = ''; } els['temporary-access-dialog']?.close(); return; }
+      const handleRecovery = e.target.closest('[data-handle-access-recovery]'); if (handleRecovery) return handleAccessRecovery(handleRecovery.dataset.handleAccessRecovery);
+      const rejectRecovery = e.target.closest('[data-reject-access-recovery]'); if (rejectRecovery) return rejectAccessRecovery(rejectRecovery.dataset.rejectAccessRecovery);
+      const openRecovery = e.target.closest('[data-open-access-recovery]'); if (openRecovery) {
+        await client.rpc('mark_notification_read', { p_notification_id: Number(openRecovery.dataset.openAccessRecovery) });
+        await Promise.all([loadNotifications(), loadAccessRecoveryRequests()]);
+        renderNotifications(); renderAccessRecoveryRequests(); navigate('admin');
+        setTimeout(() => byId('access-recovery-admin-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+        return;
+      }
       const conversation = e.target.closest('[data-open-conversation]'); if (conversation) return openConversation(conversation.dataset.openConversation);
       const openNotification = e.target.closest('[data-open-notification]'); if (openNotification) {
         await client.rpc('mark_notification_read', { p_notification_id: Number(openNotification.dataset.openNotification) });

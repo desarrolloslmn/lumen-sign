@@ -2621,3 +2621,132 @@ body.dialog-open #app-view{
     padding:.45rem 0;
   }
 }
+
+
+/* ============================================================
+   LUMEN SIGN v8.5.3 — Recuperación administrativa simple
+   ============================================================ */
+.access-recovery-dialog,
+.temporary-access-dialog{
+  width:min(560px,calc(100vw - 1.5rem));
+  max-height:min(88dvh,760px);
+  padding:1.25rem;
+  overflow:auto;
+  border:0;
+  border-radius:22px;
+  background:#fff;
+  box-shadow:0 28px 90px rgba(4,20,38,.3);
+}
+
+.access-recovery-dialog::backdrop,
+.temporary-access-dialog::backdrop{
+  background:rgba(7,18,31,.72);
+  backdrop-filter:blur(5px);
+}
+
+.security-access-box.compact{
+  margin:0;
+  padding:.8rem;
+}
+
+.access-recovery-admin-panel{
+  scroll-margin-top:1rem;
+}
+
+.access-recovery-list{
+  display:grid;
+  gap:.8rem;
+}
+
+.access-recovery-card{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:1rem;
+  align-items:center;
+  padding:1rem;
+  border:1px solid #dbe5ef;
+  border-radius:16px;
+  background:#fff;
+}
+
+.access-recovery-copy h3{
+  margin:.45rem 0 .2rem;
+}
+
+.access-recovery-copy p{
+  margin:.16rem 0;
+}
+
+.access-recovery-copy time{
+  display:block;
+  margin-top:.38rem;
+  color:#6c7d90;
+  font-size:.76rem;
+}
+
+.access-recovery-actions{
+  display:grid;
+  gap:.45rem;
+  min-width:210px;
+}
+
+.temporary-access-result{
+  display:grid;
+  gap:.3rem;
+  padding:1rem;
+  border:1px solid #cfe0ef;
+  border-radius:16px;
+  background:#f6faff;
+}
+
+.temporary-access-result span{
+  color:#6c7d90;
+  font-size:.72rem;
+  font-weight:850;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+}
+
+.temporary-access-result strong,
+.temporary-access-result code{
+  display:block;
+  overflow-wrap:anywhere;
+  font-size:1rem;
+}
+
+.temporary-access-result code{
+  margin:.15rem 0 .7rem;
+  padding:.75rem;
+  border-radius:10px;
+  background:#102a46;
+  color:#fff;
+  font-size:1.05rem;
+  text-align:center;
+  user-select:all;
+}
+
+@media(max-width:700px){
+  .access-recovery-dialog,
+  .temporary-access-dialog{
+    width:100vw;
+    max-width:100vw;
+    height:100dvh;
+    max-height:100dvh;
+    margin:0;
+    padding:calc(1rem + env(safe-area-inset-top)) .9rem calc(1rem + env(safe-area-inset-bottom));
+    border-radius:0;
+  }
+
+  .access-recovery-card{
+    grid-template-columns:1fr;
+  }
+
+  .access-recovery-actions{
+    min-width:0;
+  }
+
+  .access-recovery-actions button{
+    width:100%;
+    min-height:46px;
+  }
+}
