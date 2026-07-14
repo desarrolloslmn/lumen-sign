@@ -18,7 +18,9 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.5.1-correccion-modal-mobile';
+  const APP_VERSION = '8.5.2-preproduccion-segura';
+  const ALLOW_EMAIL_PASSWORD_RESET = false;
+  const PASSWORD_RECOVERY_MESSAGE = 'Por seguridad, la recuperación por correo está desactivada. Solicita al superadministrador verificar tu identidad y restablecer el acceso.';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
@@ -106,6 +108,19 @@
       'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
+
+    if (!ALLOW_EMAIL_PASSWORD_RESET) {
+      if (els['forgot-password']) {
+        els['forgot-password'].textContent = 'Solicitar recuperación de acceso';
+        els['forgot-password'].setAttribute(
+          'title',
+          'La recuperación requiere validación del superadministrador.'
+        );
+      }
+      els['reset-panel']?.classList.add('hidden');
+      els['reset-request-form']?.classList.add('hidden');
+      els['reset-confirm-form']?.classList.add('hidden');
+    }
   }
 
   function toast(message, error = false) {
@@ -554,6 +569,12 @@
   }
 
   function showResetPanel(email = '', mode = 'request') {
+    if (!ALLOW_EMAIL_PASSWORD_RESET) {
+      switchAuthTab('login');
+      toast(PASSWORD_RECOVERY_MESSAGE, true);
+      return;
+    }
+
     qsa('[data-auth-tab]').forEach(btn => btn.classList.remove('active'));
     els['login-form'].classList.add('hidden');
     if (els['register-form']) els['register-form'].classList.add('hidden');
@@ -573,6 +594,7 @@
   }
 
   function recoveryLinkDetected() {
+    if (!ALLOW_EMAIL_PASSWORD_RESET) return false;
     const value = `${location.search || ''}&${location.hash || ''}`;
     return /(?:^|[?&#])type=recovery(?:&|$)/i.test(value);
   }
@@ -3787,6 +3809,10 @@
 
 
   async function sendPasswordResetLink(email) {
+    if (!ALLOW_EMAIL_PASSWORD_RESET) {
+      throw new Error(PASSWORD_RECOVERY_MESSAGE);
+    }
+
     const cleanEmail = String(email || '').trim().toLowerCase();
     if (!cleanEmail) throw new Error('Escribe tu correo.');
 
@@ -3808,8 +3834,8 @@
     const password = byId('reset-password').value;
     const confirmation = byId('reset-password-confirm').value;
 
-    if (password.length < 10) {
-      throw new Error('La contraseña debe tener al menos 10 caracteres.');
+    if (!passwordMeetsSecurityPolicy(password)) {
+      throw new Error('La contraseña debe tener mínimo 12 caracteres, mayúscula, minúscula, número y símbolo.');
     }
 
     if (password !== confirmation) {
@@ -3871,6 +3897,10 @@
       });
     }
     els['forgot-password'].addEventListener('click', () => {
+      if (!ALLOW_EMAIL_PASSWORD_RESET) {
+        toast(PASSWORD_RECOVERY_MESSAGE, true);
+        return;
+      }
       showResetPanel(byId('login-email').value.trim());
     });
     els['reset-back-login'].addEventListener('click', () => switchAuthTab('login'));
@@ -4052,6 +4082,16 @@
   async function handleRecoveryEvent(event, session) {
     const isRecovery = event === 'PASSWORD_RECOVERY' || (state.passwordResetActive && event === 'SIGNED_IN');
     if (!isRecovery) return false;
+
+    if (!ALLOW_EMAIL_PASSWORD_RESET) {
+      state.passwordResetActive = false;
+      try { await client.auth.signOut({ scope: 'local' }); }
+      catch (error) { console.warn('No se pudo limpiar la sesión de recuperación.', error); }
+      showAuth();
+      switchAuthTab('login');
+      toast(PASSWORD_RECOVERY_MESSAGE, true);
+      return true;
+    }
 
     state.passwordResetActive = true;
     state.session = session;
