@@ -2839,3 +2839,12 @@ dialog[open] > .toast{
     font-size:.78rem;
   }
 }
+
+
+/* ============================================================
+   LUMEN SIGN v8.5.5 — Corrección de pantalla borrosa al volver
+   ============================================================ */
+.security-gate-locked #app-view .content,
+.security-gate-locked #app-view .sidebar{
+  filter:none!important;
+}

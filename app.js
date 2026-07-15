@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.5.4-seguridad-mensajes-notificaciones';
+  const APP_VERSION = '8.5.5-correccion-blur-pestana';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -907,7 +907,7 @@
   function restoreRequiredSecurityDialog() {
     if (!state.securityGateLocked) return;
 
-    if (state.forcePasswordChangeActive && els['force-password-dialog'] && !els['force-password-dialog'].open) {
+    if (state.forcePasswordChangeActive && state.profile?.must_change_password && els['force-password-dialog'] && !els['force-password-dialog'].open) {
       els['force-password-dialog'].showModal();
       setTimeout(() => byId('force-current-password')?.focus(), 50);
       return;
@@ -922,7 +922,12 @@
     if (state.mfaRequiredActive && state.mfa?.mode === 'verify' && els['mfa-verify-dialog'] && !els['mfa-verify-dialog'].open) {
       els['mfa-verify-dialog'].showModal();
       setTimeout(() => byId('mfa-verify-code')?.focus(), 50);
+      return;
     }
+
+    // Protección contra estados visuales atascados después de cambiar de pestaña,
+    // refrescar token o cerrar un diálogo crítico ya resuelto.
+    setSecurityGateLocked(false);
   }
 
   function closeOpenDialogs({ keepSecurity = false } = {}) {
@@ -1062,16 +1067,25 @@
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
       state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null; state.accessRecoveryRequests = [];
       clearForcePasswordDialog(); clearMfaDialogs(); stopLiveSync();
+      setSecurityGateLocked(false);
       showAuth(); return;
     }
+
     const userId = session.user.id;
-    setSecurityGateLocked(true);
+
+    // Cuando el navegador refresca el token o el usuario regresa a la pestaña,
+    // Supabase puede disparar onAuthStateChange aunque la aplicación ya esté
+    // cargada y verificada. En v8.5.4 se activaba la compuerta antes de esta
+    // validación y podía quedarse el efecto visual borroso/inert.
     if (!force && state.loadedUserId === userId && state.profile) {
       showApp();
       if (state.profile?.must_change_password) { await prepareForcedPasswordChange(); return; }
       if (!(await enforceMfaForAll())) return;
+      setSecurityGateLocked(false);
       return;
     }
+
+    setSecurityGateLocked(true);
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
     state.sessionLoadPromise = (async () => {
       stopLiveSync();
@@ -3953,6 +3967,7 @@
 
   function clearForcePasswordDialog() {
     state.forcePasswordChangeActive = false;
+    if (!state.mfaRequiredActive) setSecurityGateLocked(false);
     document.body.classList.remove('password-change-required');
     clearForcePasswordInlineError();
     byId('force-password-form')?.reset();
