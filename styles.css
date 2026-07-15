@@ -2750,3 +2750,92 @@ body.dialog-open #app-view{
     min-height:46px;
   }
 }
+
+
+/* ============================================================
+   LUMEN SIGN v8.5.4 — Mensajes, MFA y bloqueos visibles
+   ============================================================ */
+
+.toast.in-dialog{
+  z-index:2147483647;
+  right:1rem;
+  bottom:1rem;
+  max-width:min(460px,calc(100vw - 2rem));
+}
+
+dialog[open] > .toast{
+  position:fixed;
+  z-index:2147483647;
+}
+
+.security-gate-locked #app-view .sidebar,
+.security-gate-locked #app-view .content,
+.security-gate-locked .mobile-bottom-nav{
+  pointer-events:none!important;
+  user-select:none;
+}
+
+.security-gate-locked #app-view .content,
+.security-gate-locked #app-view .sidebar{
+  filter:blur(1px);
+}
+
+.mfa-time-help{
+  padding:.75rem .85rem;
+  border:1px solid #bfd5ea;
+  border-radius:12px;
+  background:#f2f8ff;
+  color:#17365f;
+  font-size:.82rem;
+  line-height:1.45;
+}
+
+.mfa-time-help strong{
+  display:block;
+  margin-bottom:.14rem;
+}
+
+.email-system-warning{
+  grid-column:1/-1;
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:.7rem;
+  padding:.8rem .9rem;
+  border:1px solid #efcf83;
+  border-radius:13px;
+  background:#fff8e5;
+  color:#714f00;
+}
+
+.email-system-warning.danger{
+  border-color:#efaaa4;
+  background:#fff0ee;
+  color:#8a1c15;
+}
+
+.email-system-warning span{
+  font-size:.82rem;
+}
+
+.task-wait{
+  line-height:1.45;
+}
+
+@media(max-width:700px){
+  .toast.in-dialog,
+  dialog[open] > .toast{
+    left:.55rem;
+    right:.55rem;
+    bottom:calc(.55rem + env(safe-area-inset-bottom));
+    max-width:none;
+  }
+
+  .email-system-warning{
+    flex-direction:column;
+  }
+
+  .mfa-time-help{
+    font-size:.78rem;
+  }
+}

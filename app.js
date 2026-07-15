@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.5.3-recuperacion-administrativa-simple';
+  const APP_VERSION = '8.5.4-seguridad-mensajes-notificaciones';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -48,7 +48,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
+    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -80,7 +80,7 @@
     pending: 'Pendiente', active: 'Activo', suspended: 'Suspendido',
     draft: 'Borrador', awaiting_approval: 'En aprobación', awaiting_signature: 'En firma',
     completed: 'Completado', rejected: 'Rechazado', cancelled: 'Cancelado', paused: 'Pausado', expired: 'Vencido',
-    approved: 'Aprobado', signed: 'Firmado', ready: 'Listo', processing: 'Procesando', failed: 'Fallido'
+    approved: 'Aprobado', signed: 'Firmado', ready: 'Listo', processing: 'Procesando', failed: 'Fallido', sent: 'Enviado'
   };
   const participantRoleLabels = { editor: 'Editor', approver: 'Aprobador', signer: 'Firmante', viewer: 'Consulta' };
 
@@ -128,11 +128,95 @@
     ensureAdminRecoveryUi();
   }
 
+  function friendlyErrorMessage(error, fallback = 'No fue posible completar la operación. Intenta nuevamente.') {
+    const raw = String(error?.message || error || '').trim();
+    const text = raw.toLowerCase();
+
+    if (
+      !navigator.onLine
+      || text.includes('networkerror')
+      || text.includes('failed to fetch')
+      || text.includes('fetch resource')
+      || text.includes('load failed')
+      || text.includes('authretryablefetcherror')
+      || text.includes('connection reset')
+    ) {
+      return 'No se pudo conectar con Lumen Sign. Revisa tu conexión o intenta desde otra red. Si estás en una red corporativa, solicita que permitan el acceso a Supabase.';
+    }
+
+    if (text.includes('invalid login credentials')) {
+      return 'El correo o la contraseña no son correctos.';
+    }
+    if (text.includes('email not confirmed')) {
+      return 'La cuenta todavía no está confirmada. Contacta al superadministrador.';
+    }
+    if (text.includes('too many requests') || text.includes('rate limit')) {
+      return 'Se realizaron demasiados intentos. Espera unos minutos antes de volver a intentar.';
+    }
+    if (text.includes('jwt expired') || text.includes('invalid jwt') || text.includes('session expired')) {
+      return 'Tu sesión venció. Cierra sesión e ingresa nuevamente.';
+    }
+    if (text.includes('current password required')) {
+      return 'Escribe la contraseña temporal o actual con la que ingresaste.';
+    }
+    if (text.includes('invalid current password') || text.includes('current password') && text.includes('incorrect')) {
+      return 'La contraseña actual no coincide. Escríbela nuevamente sin espacios adicionales.';
+    }
+    if (
+      text.includes('row level security')
+      || text.includes('permission denied')
+      || text.includes('not authorized')
+      || text.includes('unauthorized')
+      || text.includes('forbidden')
+    ) {
+      return 'No tienes permiso para realizar esta acción.';
+    }
+    if (
+      text.includes('otp')
+      || text.includes('totp')
+      || text.includes('mfa')
+      || text.includes('challenge')
+      || text.includes('verification code')
+    ) {
+      return mfaFriendlyError(error);
+    }
+
+    const looksSpanish = /\b(no|la|el|los|las|una|un|tu|tus|para|debes|debe|código|contraseña|documento|solicitud|permiso|sesión|acceso|correo|firma|usuario|proceso|expediente)\b/i.test(raw);
+    return looksSpanish ? raw : fallback;
+  }
+
+  function restoreToastHost() {
+    if (els.toast && els.toast.parentElement !== document.body) {
+      document.body.appendChild(els.toast);
+    }
+  }
+
   function toast(message, error = false) {
-    els.toast.textContent = message;
-    els.toast.className = `toast show${error ? ' error' : ''}`;
+    if (!els.toast) return;
+
+    const visibleMessage = error
+      ? friendlyErrorMessage(message)
+      : String(message || '');
+
+    const openDialogs = qsa('dialog[open]');
+    const activeDialog = openDialogs.length ? openDialogs[openDialogs.length - 1] : null;
+
+    if (activeDialog && els.toast.parentElement !== activeDialog) {
+      activeDialog.appendChild(els.toast);
+    } else if (!activeDialog) {
+      restoreToastHost();
+    }
+
+    els.toast.textContent = visibleMessage;
+    els.toast.setAttribute('role', error ? 'alert' : 'status');
+    els.toast.setAttribute('aria-live', error ? 'assertive' : 'polite');
+    els.toast.className = `toast show${error ? ' error' : ''}${activeDialog ? ' in-dialog' : ''}`;
+
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => els.toast.className = 'toast', 3800);
+    toast.timer = setTimeout(() => {
+      els.toast.className = 'toast';
+      restoreToastHost();
+    }, error ? 6500 : 4200);
   }
 
 
@@ -467,6 +551,16 @@
   function mfaFriendlyError(error) {
     const raw = String(error?.message || error || '').trim();
     const text = raw.toLowerCase();
+
+    if (
+      text.includes('networkerror')
+      || text.includes('failed to fetch')
+      || text.includes('fetch resource')
+      || text.includes('load failed')
+    ) {
+      return 'No se pudo validar el código porque no hay conexión con Lumen Sign. Revisa la red e intenta nuevamente.';
+    }
+
     if (
       !raw ||
       error?.status === 400 ||
@@ -479,9 +573,42 @@
       text.includes('otp') ||
       text.includes('totp')
     ) {
-      return 'Código incorrecto o vencido. Abre tu app autenticadora y escribe el código actual de 6 dígitos.';
+      return 'Código incorrecto o vencido. Espera a que aparezca un código nuevo, confirma que la fecha y hora del teléfono estén en automático y escribe los 6 dígitos actuales.';
     }
-    return raw;
+    return friendlyErrorMessage(raw, 'No fue posible validar el código. Intenta nuevamente con el código actual.');
+  }
+
+  function ensureMfaTimeHelp() {
+    const definitions = [
+      ['mfa-setup-form', 'mfa-setup-time-help'],
+      ['mfa-verify-form', 'mfa-verify-time-help'],
+      ['sign-confirm-form', 'sign-confirm-time-help']
+    ];
+
+    definitions.forEach(([formId, helpId]) => {
+      const form = byId(formId);
+      if (!form || byId(helpId)) return;
+      const help = document.createElement('div');
+      help.id = helpId;
+      help.className = 'mfa-time-help';
+      help.setAttribute('role', 'note');
+      help.innerHTML = '<strong>Sobre el código:</strong> cambia aproximadamente cada 30 segundos. Si está por terminar, espera al siguiente. Mantén la fecha y hora del teléfono en modo automático.';
+      const actions = form.querySelector('.button-row') || form.querySelector('button[type="submit"]');
+      form.insertBefore(help, actions || null);
+    });
+  }
+
+  function bindNumericMfaInput(input) {
+    if (!input || input.dataset.numericMfaBound === 'true') return;
+    input.dataset.numericMfaBound = 'true';
+    input.addEventListener('input', () => {
+      input.value = String(input.value || '').replace(/\D/g, '').slice(0, 6);
+    });
+    input.addEventListener('paste', () => {
+      setTimeout(() => {
+        input.value = String(input.value || '').replace(/\D/g, '').slice(0, 6);
+      }, 0);
+    });
   }
 
 
@@ -582,6 +709,13 @@
     ensureSignConfirmSecurityFields();
     byId('sign-confirm-form')?.reset();
     clearSignConfirmError();
+  }
+
+  function cancelSignConfirmation() {
+    state.pendingSignConfirmation = null;
+    resetSignConfirmForm();
+    if (els['sign-confirm-dialog']?.open) els['sign-confirm-dialog'].close();
+    toast('La confirmación se canceló. La firma no fue enviada.');
   }
 
   async function verifyMfaForSigning(code) {
@@ -722,8 +856,8 @@
       return result;
     } catch (error) {
       console.error(error);
-      toast(error?.message || 'Ocurrió un error.', true);
-      throw error;
+      toast(friendlyErrorMessage(error), true);
+      return null;
     } finally {
       setBusy(false);
     }
@@ -748,6 +882,48 @@
     'mfa-setup-dialog',
     'mfa-verify-dialog'
   ]);
+
+  function setSecurityGateLocked(locked) {
+    state.securityGateLocked = Boolean(locked);
+    document.body.classList.toggle('security-gate-locked', state.securityGateLocked);
+
+    const targets = [
+      document.querySelector('#app-view .sidebar'),
+      document.querySelector('#app-view .content'),
+      byId('mobile-bottom-nav')
+    ].filter(Boolean);
+
+    targets.forEach(target => {
+      if (state.securityGateLocked) {
+        target.setAttribute('inert', '');
+        target.setAttribute('aria-hidden', 'true');
+      } else {
+        target.removeAttribute('inert');
+        target.removeAttribute('aria-hidden');
+      }
+    });
+  }
+
+  function restoreRequiredSecurityDialog() {
+    if (!state.securityGateLocked) return;
+
+    if (state.forcePasswordChangeActive && els['force-password-dialog'] && !els['force-password-dialog'].open) {
+      els['force-password-dialog'].showModal();
+      setTimeout(() => byId('force-current-password')?.focus(), 50);
+      return;
+    }
+
+    if (state.mfaRequiredActive && state.mfa?.mode === 'enroll' && els['mfa-setup-dialog'] && !els['mfa-setup-dialog'].open) {
+      els['mfa-setup-dialog'].showModal();
+      setTimeout(() => byId('mfa-setup-code')?.focus(), 50);
+      return;
+    }
+
+    if (state.mfaRequiredActive && state.mfa?.mode === 'verify' && els['mfa-verify-dialog'] && !els['mfa-verify-dialog'].open) {
+      els['mfa-verify-dialog'].showModal();
+      setTimeout(() => byId('mfa-verify-code')?.focus(), 50);
+    }
+  }
 
   function closeOpenDialogs({ keepSecurity = false } = {}) {
     qsa('dialog[open]').forEach(dialog => {
@@ -791,6 +967,7 @@
   }
 
   function showAuth() {
+    setSecurityGateLocked(false);
     closeOpenDialogs();
     closeMobileMenu();
     els['auth-view'].classList.remove('hidden');
@@ -876,6 +1053,7 @@
     renderAll();
     startLiveSync();
     state.loadedUserId = state.session.user.id;
+    setSecurityGateLocked(false);
   }
 
   async function handleSession(session, force = false) {
@@ -887,6 +1065,7 @@
       showAuth(); return;
     }
     const userId = session.user.id;
+    setSecurityGateLocked(true);
     if (!force && state.loadedUserId === userId && state.profile) {
       showApp();
       if (state.profile?.must_change_password) { await prepareForcedPasswordChange(); return; }
@@ -1069,7 +1248,7 @@
     let allPending = [];
     if (ids.length) {
       const response = await client.from('document_participants')
-        .select('document_id,participant_role,sequence,action_status')
+        .select('document_id,user_id,participant_role,sequence,action_status')
         .in('document_id', ids)
         .eq('action_status', 'pending')
         .in('participant_role', ['approver','signer']);
@@ -1081,13 +1260,22 @@
         : task.documents.status === 'awaiting_signature' ? 'signer' : null;
       const stageRows = allPending.filter(row => row.document_id === task.document_id && row.participant_role === expectedRole);
       const minSequence = stageRows.length ? Math.min(...stageRows.map(row => Number(row.sequence))) : null;
+      const blockers = minSequence === null
+        ? []
+        : stageRows.filter(row => Number(row.sequence) === minSequence);
       const isActionable = task.participant_role === expectedRole && Number(task.sequence) === minSequence;
       const waitingReason = task.documents.status === 'paused' ? 'El proceso está pausado por el propietario o un administrador.'
         : task.documents.status === 'cancelled' ? 'El proceso fue cancelado.'
         : expectedRole !== task.participant_role
-          ? (expectedRole === 'approver' ? 'La aprobación todavía no termina.' : 'La firma todavía no inicia.')
-          : !isActionable ? 'Otra persona debe actuar antes que tú.' : '';
-      return { ...task, is_actionable: isActionable, waiting_reason: waitingReason };
+          ? (expectedRole === 'approver' ? 'La etapa de aprobación todavía no termina.' : 'La etapa de firma todavía no inicia.')
+          : !isActionable ? 'Existe una persona pendiente antes de tu turno.' : '';
+      return {
+        ...task,
+        is_actionable: isActionable,
+        waiting_reason: waitingReason,
+        expected_role: expectedRole,
+        blocker_user_ids: blockers.map(row => row.user_id).filter(Boolean)
+      };
     });
   }
 
@@ -1397,10 +1585,18 @@
       ['Fallidos', Number(item.failed || 0)],
       ['Enviados 24 h', Number(item.sent_24h || 0)]
     ];
-    els['email-system-status'].innerHTML = cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
+    const warning = !item.emails_enabled
+      ? '<div class="email-system-warning"><strong>Correos desactivados.</strong><span>Activa el sistema antes de esperar notificaciones por correo.</span></div>'
+      : Number(item.failed || 0) > 0
+        ? '<div class="email-system-warning danger"><strong>Hay correos fallidos.</strong><span>Revisa el detalle y usa Reintentar después de corregir la función o las credenciales.</span></div>'
+        : Number(item.pending || 0) > 0
+          ? '<div class="email-system-warning"><strong>Hay correos pendientes.</strong><span>Si permanecen así más de dos minutos, revisa el Cron y la Edge Function del mailer.</span></div>'
+          : '';
+
+    els['email-system-status'].innerHTML = warning + cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
     if (!els['email-delivery-list']) return;
     const rows = state.emailDeliveries || [];
-    els['email-delivery-list'].innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Destinatario</th><th>Asunto</th><th>Estado</th><th>Intentos</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.recipient_email)}</td><td>${escapeHtml(row.subject)}</td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td>${row.status === 'failed' ? `<button class="secondary" data-retry-email="${row.id}">Reintentar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Todavía no hay correos en la cola.</div>';
+    els['email-delivery-list'].innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Destinatario</th><th>Asunto</th><th>Estado</th><th>Intentos</th><th>Detalle</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.recipient_email)}</td><td>${escapeHtml(row.subject)}</td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${row.last_error ? escapeHtml(friendlyErrorMessage(row.last_error, 'El proveedor de correo rechazó el envío. Revisa los registros de la Edge Function.')) : '—'}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td>${row.status === 'failed' ? `<button class="secondary" data-retry-email="${row.id}">Reintentar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Todavía no hay correos en la cola.</div>';
   }
 
   function renderAll() {
@@ -1514,7 +1710,12 @@
       const label = task.participant_role === 'approver' ? 'Aprobación' : 'Firma';
       const icon = task.participant_role === 'approver' ? '✓' : '✍';
       const buttonLabel = task.is_actionable ? (task.participant_role === 'approver' ? 'Revisar para aprobar' : 'Revisar para firmar') : 'Ver proceso';
-      const orderText = task.is_actionable ? 'Es tu turno ahora' : (task.waiting_reason || 'Esperando a la persona anterior');
+      const blockerNames = (task.blocker_user_ids || []).map(profileName).filter(Boolean);
+      let orderText = task.is_actionable ? 'Es tu turno ahora' : (task.waiting_reason || 'Esperando a la persona anterior');
+      if (!task.is_actionable && blockerNames.length) {
+        const action = task.expected_role === 'approver' ? 'revisar o aprobar' : 'firmar';
+        orderText = `Pendiente antes de tu turno: ${blockerNames.join(', ')} debe ${action}.`;
+      }
       return `<article class="task-card ${task.is_actionable?'actionable':''}"><div class="task-badge">${icon}</div><div><h3>${escapeHtml(task.documents.title)}</h3><div class="task-meta"><span class="pill">${label}</span>${pill(task.documents.status)}</div><p class="task-wait">${escapeHtml(orderText)}</p></div><button class="${task.is_actionable?'primary':'secondary'}" data-open-document="${task.document_id}">${buttonLabel}</button></article>`;
     }).join('') : '<div class="panel empty">No tienes tareas pendientes. El sistema te avisará cuando llegue tu turno.</div>';
   }
@@ -2218,6 +2419,7 @@
     const currentPending = stagePending.filter(item => Number(item.sequence) === minSequence);
     const myApproval = participants.find(item => item.user_id === me && item.participant_role === 'approver' && item.action_status === 'pending' && Number(item.sequence) === minSequence);
     const mySignature = participants.find(item => item.user_id === me && item.participant_role === 'signer' && item.action_status === 'pending' && Number(item.sequence) === minSequence);
+    const myPendingSignature = participants.find(item => item.user_id === me && item.participant_role === 'signer' && item.action_status === 'pending');
     const isAssignedEditor = participants.some(item => item.user_id === me && item.participant_role === 'editor');
     const canConfigure = doc.status === 'draft' && (doc.owner_id === me || isAdmin() || isContracts() || isAssignedEditor);
     const canManage = (doc.owner_id === me || isAdmin() || isContracts());
@@ -2262,7 +2464,11 @@
     else if (doc.status === 'awaiting_approval') guidance = isCollaborativeReview
       ? (myApproval ? 'Revisa el PDF, comenta y da tu visto bueno. Si no respondes dentro del plazo, se registrará sin observaciones y el flujo continuará.' : 'La revisión está abierta. El silencio al vencer no detendrá el proceso.')
       : (myApproval ? 'Es tu turno de revisar y decidir.' : 'El documento está esperando a la persona que debe aprobar antes.');
-    else if (doc.status === 'awaiting_signature') guidance = mySignature ? 'Es tu turno de revisar y colocar tu firma.' : 'El documento está esperando a la persona que debe firmar antes.';
+    else if (doc.status === 'awaiting_signature') guidance = mySignature
+      ? 'Es tu turno de revisar y colocar tu firma.'
+      : myPendingSignature
+        ? `Antes de tu turno debe firmar: ${nextActor}.`
+        : `El documento está esperando la firma de: ${nextActor}.`;
     else if (doc.status === 'completed') guidance = 'El proceso terminó. La versión actual contiene las firmas aplicadas.';
     else if (doc.status === 'rejected') guidance = 'El documento fue rechazado. Crea una corrección conservando el historial original.';
     else if (doc.status === 'paused') guidance = 'El proceso está pausado. Nadie puede aprobar ni firmar hasta que se reanude.';
@@ -3395,7 +3601,7 @@
     }
     resetSignConfirmForm();
     state.pendingSignConfirmation = signing.doc.id;
-    els['sign-confirm-dialog'].showModal();
+    openExclusiveDialog(els['sign-confirm-dialog']);
     setTimeout(() => byId('sign-confirm-password').focus(), 80);
   }
 
@@ -3714,6 +3920,7 @@
   function showForcePasswordDialog() {
     if (!els['force-password-dialog'] || !state.profile?.must_change_password) return;
 
+    setSecurityGateLocked(true);
     state.forcePasswordChangeActive = true;
     document.body.classList.add('password-change-required');
     ensureForcePasswordErrorElement();
@@ -3826,6 +4033,7 @@
   }
 
   function showMfaSetupDialog(enrollment) {
+    setSecurityGateLocked(true);
     state.mfaRequiredActive = true;
     document.body.classList.add('mfa-required');
     if (els['mfa-qr']) {
@@ -3843,6 +4051,7 @@
   }
 
   function showMfaVerifyDialog() {
+    setSecurityGateLocked(true);
     state.mfaRequiredActive = true;
     document.body.classList.add('mfa-required');
     ensureMfaErrorElement('verify');
@@ -3932,9 +4141,18 @@
 
     try {
       setBusy(true);
+
+      // Se crea un challenge nuevo en el momento de validar para evitar que
+      // una ventana abierta durante varios minutos use un challenge vencido.
+      const challenge = await client.auth.mfa.challenge({
+        factorId: state.mfa.factorId
+      });
+      if (challenge.error) throw challenge.error;
+
+      state.mfa.challengeId = challenge.data.id;
       const { error } = await client.auth.mfa.verify({
         factorId: state.mfa.factorId,
-        challengeId: state.mfa.challengeId,
+        challengeId: challenge.data.id,
         code
       });
       if (error) throw error;
@@ -4142,12 +4360,28 @@
   }
 
   function bindEvents() {
+    ensureMfaTimeHelp();
+    bindNumericMfaInput(els['mfa-setup-code']);
+    bindNumericMfaInput(els['mfa-verify-code']);
+    bindNumericMfaInput(els['sign-confirm-mfa-code']);
+
+    const signConfirmClose = els['sign-confirm-dialog']?.querySelector('.dialog-close');
+    if (signConfirmClose) {
+      signConfirmClose.type = 'button';
+      signConfirmClose.addEventListener('click', cancelSignConfirmation);
+    }
+
     qsa('dialog').forEach(dialog => {
       dialog.addEventListener('close', () => {
         if (dialog.id === 'prepare-dialog') {
           document.body.classList.remove('prepare-dialog-open');
         }
+        if (dialog.contains(els.toast)) restoreToastHost();
         syncDialogState();
+
+        if (securityDialogIds.has(dialog.id)) {
+          setTimeout(restoreRequiredSecurityDialog, 0);
+        }
       });
 
       dialog.addEventListener('cancel', () => {
@@ -4199,6 +4433,12 @@
     els['mfa-setup-code']?.addEventListener('input', () => clearMfaInlineError('setup'));
     els['mfa-verify-form']?.addEventListener('submit', completeMfaVerification);
     els['mfa-verify-dialog']?.addEventListener('cancel', event => event.preventDefault());
+    els['sign-confirm-dialog']?.addEventListener('cancel', event => {
+      if (state.pendingSignConfirmation) {
+        event.preventDefault();
+        showSignConfirmError('general', 'Para cancelar, usa el botón de cerrar. La tecla Esc está desactivada durante esta validación.');
+      }
+    });
     els['mfa-verify-logout']?.addEventListener('click', logoutFromSecurityGate);
     els['mfa-verify-retry']?.addEventListener('click', retryMfaChallenge);
     els['mfa-verify-code']?.addEventListener('input', () => clearMfaInlineError('verify'));
@@ -4207,7 +4447,25 @@
     els['menu-button'].setAttribute('aria-expanded', 'false');
     els['menu-button'].addEventListener('click', toggleMobileMenu);
     els['menu-overlay']?.addEventListener('click', closeMobileMenu);
-    window.addEventListener('keydown', event => { if (event.key === 'Escape') closeMobileMenu(); });
+    window.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+
+      const criticalOpen = Boolean(
+        els['force-password-dialog']?.open
+        || els['mfa-setup-dialog']?.open
+        || els['mfa-verify-dialog']?.open
+        || (els['sign-confirm-dialog']?.open && state.pendingSignConfirmation)
+      );
+
+      if (criticalOpen || state.securityGateLocked) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        restoreRequiredSecurityDialog();
+        return;
+      }
+
+      closeMobileMenu();
+    }, true);
     window.addEventListener('resize', () => { if (window.matchMedia('(min-width: 901px)').matches) closeMobileMenu(); });
     els['document-search'].addEventListener('input', renderDocuments);
     els['document-status-filter'].addEventListener('change', renderDocuments);
@@ -4409,16 +4667,20 @@
           if(event==='TOKEN_REFRESHED'||event==='USER_UPDATED'){state.session=session;return;}
           await handleSession(session);
         }
-        catch (error) { console.error(error); toast(error.message || 'Error de sesión.', true); }
+        catch (error) { console.error(error); toast(friendlyErrorMessage(error, 'No fue posible validar la sesión.'), true); }
       }, 0);
     });
     window.addEventListener('unhandledrejection', event => {
-      const message = event.reason?.message || 'Ocurrió un error inesperado.';
-      console.error(event.reason); toast(message, true);
+      event.preventDefault();
+      console.error(event.reason);
+      toast(friendlyErrorMessage(event.reason, 'Ocurrió un error inesperado. Intenta nuevamente.'), true);
     });
     const { data } = await client.auth.getSession();
     if (data.session) await handleSession(data.session); else showAuth();
   }
 
-  init().catch(error => { console.error(error); toast(error.message || 'No se pudo iniciar la aplicación.', true); });
+  init().catch(error => {
+    console.error(error);
+    toast(friendlyErrorMessage(error, 'No se pudo iniciar Lumen Sign.'), true);
+  });
 })();
