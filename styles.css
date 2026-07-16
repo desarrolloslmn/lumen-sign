@@ -2848,3 +2848,67 @@ dialog[open] > .toast{
 .security-gate-locked #app-view .sidebar{
   filter:none!important;
 }
+
+
+/* ============================================================
+   LUMEN SIGN v8.5.6 — Inicio arriba al cambiar de paso o sección
+   ============================================================ */
+.page-section{
+  scroll-margin-top:1rem;
+}
+
+.wizard-panel{
+  scroll-margin-top:1rem;
+}
+
+
+/* ============================================================
+   LUMEN SIGN v8.6.0 — Push, reenvío y evidencia multicanal
+   ============================================================ */
+.push-status-box{
+  display:grid;
+  gap:.25rem;
+  padding:1rem;
+  border:1px solid #c9d7e8;
+  border-radius:16px;
+  background:#f8fbff;
+  color:#17365f;
+}
+
+.push-status-box strong{
+  font-size:1rem;
+}
+
+.push-status-box span{
+  color:#64748b;
+  font-size:.86rem;
+  line-height:1.45;
+}
+
+.notification-evidence-admin-panel .email-status-grid,
+#push-system-status.email-status-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:.75rem;
+}
+
+.mini-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:.35rem;
+}
+
+.mini-actions button{
+  white-space:nowrap;
+}
+
+@media(max-width:700px){
+  .push-profile-panel .button-row,
+  .notification-evidence-admin-panel .button-row{
+    width:100%;
+  }
+  .push-profile-panel .button-row button,
+  .notification-evidence-admin-panel .button-row button{
+    flex:1 1 100%;
+  }
+}

@@ -18,11 +18,13 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.5.5-correccion-blur-pestana';
+  const APP_VERSION = '8.6.0-push-reenvio-notificaciones';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
+  const PUSH_FUNCTION = 'send-push';
+  const PUSH_VAPID_PUBLIC_KEY = cfg.pushVapidPublicKey || 'BC9n68QB-ZFiUFqnbK52EHE_JJb213MmlF0t8GN3zKTs5m_uCQTxvQVmOvjj9ePSyeDBgAgeGqXdS0AQaZHsbVk';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const PRIVACY_NOTICE_VERSION = 'LUMEN-PRIVACIDAD-2026-01';
@@ -48,7 +50,7 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
+    emailSystemStatus: null, emailDeliveries: [], pushSubscriptions: [], pushSystemStatus: null, pushDeliveries: [], pushIntentHandled: false, templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -104,6 +106,8 @@
       'sign-dialog','sign-pages','finish-signing','sign-progress','next-required-field',
       'preview-dialog','preview-title','preview-pages','preview-page-number','preview-page-count','preview-prev-page','preview-next-page','preview-zoom-in','preview-zoom-out','preview-zoom-label','preview-back-document','preview-download',
       'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list',
+      'push-profile-panel','push-device-status','enable-push-notifications','test-push-notification','disable-push-notifications',
+      'notification-evidence-admin-panel','push-system-status','notification-delivery-list','refresh-notification-evidence','process-push-now',
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
       'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-privacy-consent','sign-consent',
       'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
@@ -126,6 +130,7 @@
 
     ensureAccessRecoveryUi();
     ensureAdminRecoveryUi();
+    ensurePushNotificationUi();
   }
 
   function friendlyErrorMessage(error, fallback = 'No fue posible completar la operación. Intenta nuevamente.') {
@@ -319,6 +324,65 @@
     els['access-recovery-admin-panel'] = panel;
     els['access-recovery-admin-list'] = byId('access-recovery-admin-list');
     els['refresh-access-recovery'] = byId('refresh-access-recovery');
+  }
+
+
+  function ensurePushNotificationUi() {
+    const profileSection = byId('section-profile');
+    if (profileSection && !byId('push-profile-panel')) {
+      const panel = document.createElement('section');
+      panel.id = 'push-profile-panel';
+      panel.className = 'panel push-profile-panel';
+      panel.innerHTML = `
+        <div class="panel-header wrap">
+          <div>
+            <p class="eyebrow dark">Notificaciones</p>
+            <h2>Alertas en este dispositivo</h2>
+            <p class="muted small">Activa avisos del navegador para recibir tareas de firma, aprobación y vencimientos aunque no estés viendo la plataforma.</p>
+          </div>
+        </div>
+        <div id="push-device-status" class="push-status-box">
+          <strong>Estado no cargado</strong>
+          <span>Al iniciar sesión se revisará si este navegador puede recibir notificaciones.</span>
+        </div>
+        <div class="button-row wrap">
+          <button id="enable-push-notifications" class="primary" type="button">Activar notificaciones</button>
+          <button id="test-push-notification" class="secondary" type="button">Enviar prueba</button>
+          <button id="disable-push-notifications" class="ghost" type="button">Desactivar este dispositivo</button>
+        </div>
+        <p class="hint">Los avisos no incluyen documentos ni información confidencial. Al tocar la alerta se abre Lumen Sign y se requiere iniciar sesión si la sesión venció.</p>`;
+      profileSection.appendChild(panel);
+    }
+
+    const adminSection = byId('section-admin');
+    if (adminSection && !byId('notification-evidence-admin-panel')) {
+      const panel = document.createElement('section');
+      panel.id = 'notification-evidence-admin-panel';
+      panel.className = 'panel notification-evidence-admin-panel';
+      panel.innerHTML = `
+        <div class="panel-header wrap">
+          <div>
+            <p class="eyebrow dark">Multicanal</p>
+            <h2>Evidencia y reenvío de avisos</h2>
+            <p class="muted small">El correo se mantiene activo. Este panel agrega push al dispositivo y reenvío manual por todos los canales.</p>
+          </div>
+          <div class="button-row">
+            <button id="process-push-now" class="secondary" type="button">Procesar push ahora</button>
+            <button id="refresh-notification-evidence" class="secondary" type="button">Actualizar</button>
+          </div>
+        </div>
+        <div id="push-system-status" class="email-status-grid"></div>
+        <div id="notification-delivery-list"><div class="empty">Ejecuta la migración 30 para ver evidencia multicanal.</div></div>`;
+
+      const emailPanel = adminSection.querySelector('#email-system-status')?.closest('.panel');
+      if (emailPanel) emailPanel.insertAdjacentElement('afterend', panel);
+      else adminSection.appendChild(panel);
+    }
+
+    [
+      'push-profile-panel','push-device-status','enable-push-notifications','test-push-notification','disable-push-notifications',
+      'notification-evidence-admin-panel','push-system-status','notification-delivery-list','refresh-notification-evidence','process-push-now'
+    ].forEach(id => els[id] = byId(id));
   }
 
   function openAccessRecoveryDialog() {
@@ -1053,11 +1117,13 @@
     await Promise.all([
       loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(),
       loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(),
-      loadEmailSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()
+      loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()
     ]);
     renderAll();
+    handleOpenIntentFromUrl();
     startLiveSync();
     state.loadedUserId = state.session.user.id;
+    renderPushSubscriptionStatus();
     setSecurityGateLocked(false);
   }
 
@@ -1569,6 +1635,223 @@
   }
 
 
+
+  function pushSupported() {
+    return Boolean('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window);
+  }
+
+  function urlBase64ToUint8Array(value) {
+    const padding = '='.repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    return Uint8Array.from([...raw].map(char => char.charCodeAt(0)));
+  }
+
+  function currentDeviceLabel() {
+    const ua = navigator.userAgent || '';
+    if (/iphone|ipad/i.test(ua)) return 'Apple Safari';
+    if (/android/i.test(ua)) return 'Android';
+    if (/edg\//i.test(ua)) return 'Microsoft Edge';
+    if (/chrome|chromium/i.test(ua)) return 'Google Chrome';
+    if (/firefox/i.test(ua)) return 'Mozilla Firefox';
+    if (/safari/i.test(ua)) return 'Safari';
+    return 'Navegador actual';
+  }
+
+  async function getPushRegistration() {
+    if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones push web.');
+    return navigator.serviceWorker.register('./sw.js', { scope: './' });
+  }
+
+  async function currentPushSubscription() {
+    if (!pushSupported()) return null;
+    const registration = await getPushRegistration();
+    return registration.pushManager.getSubscription();
+  }
+
+  async function loadPushSubscriptions() {
+    if (!state.session || !isActive()) { state.pushSubscriptions = []; return; }
+    try {
+      const { data, error } = await client.rpc('list_my_push_subscriptions');
+      if (error) throw error;
+      state.pushSubscriptions = data || [];
+    } catch (error) {
+      console.warn('No se pudo cargar push.', error);
+      state.pushSubscriptions = [];
+    }
+  }
+
+  async function loadPushSystemStatus() {
+    if (!isAdmin()) { state.pushSystemStatus = null; state.pushDeliveries = []; return; }
+    try {
+      const [statusResponse, deliveriesResponse] = await Promise.all([
+        client.rpc('get_push_system_status'),
+        client.rpc('list_recent_notification_deliveries', { p_limit: 60 })
+      ]);
+      if (statusResponse.error) throw statusResponse.error;
+      if (deliveriesResponse.error) throw deliveriesResponse.error;
+      state.pushSystemStatus = statusResponse.data || null;
+      state.pushDeliveries = deliveriesResponse.data || [];
+    } catch (error) {
+      console.warn('No se pudo cargar evidencia push.', error);
+      state.pushSystemStatus = null;
+      state.pushDeliveries = [];
+    }
+  }
+
+  async function renderPushSubscriptionStatus() {
+    if (!els['push-device-status']) return;
+
+    if (!pushSupported()) {
+      els['push-device-status'].innerHTML = '<strong>No disponible en este navegador</strong><span>Usa Chrome, Edge, Firefox o Safari compatible. En algunos móviles se requiere instalar la app en pantalla de inicio.</span>';
+      els['enable-push-notifications']?.setAttribute('disabled', 'disabled');
+      els['test-push-notification']?.setAttribute('disabled', 'disabled');
+      els['disable-push-notifications']?.setAttribute('disabled', 'disabled');
+      return;
+    }
+
+    const permission = Notification.permission;
+    const subscription = await currentPushSubscription().catch(() => null);
+    const registeredCount = state.pushSubscriptions.filter(item => item.status === 'active').length;
+
+    els['enable-push-notifications']?.toggleAttribute('disabled', permission === 'denied');
+    els['test-push-notification']?.toggleAttribute('disabled', !subscription);
+    els['disable-push-notifications']?.toggleAttribute('disabled', !subscription);
+
+    const label = permission === 'granted'
+      ? (subscription ? 'Activadas en este dispositivo' : 'Permiso concedido, falta registrar el dispositivo')
+      : permission === 'denied'
+        ? 'Bloqueadas por el navegador'
+        : 'Pendientes de activar';
+
+    const detail = permission === 'denied'
+      ? 'Abre los permisos del navegador para permitir notificaciones de Lumen Sign.'
+      : subscription
+        ? `Este navegador está registrado. Dispositivos activos en tu cuenta: ${registeredCount}.`
+        : 'Presiona Activar notificaciones para registrar este navegador.';
+
+    els['push-device-status'].innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(detail)}</span>`;
+  }
+
+  function renderPushSystemStatus() {
+    if (!isAdmin() || !els['push-system-status']) return;
+    const item = state.pushSystemStatus;
+    if (!item) {
+      els['push-system-status'].innerHTML = '<div class="empty">Ejecuta la migración 30 y configura send-push para ver el estado.</div>';
+      if (els['notification-delivery-list']) els['notification-delivery-list'].innerHTML = '<div class="empty">Sin datos de push todavía.</div>';
+      return;
+    }
+
+    const cards = [
+      ['Dispositivos activos', Number(item.active_devices || 0)],
+      ['Usuarios con push', Number(item.users_with_push || 0)],
+      ['Push pendientes', Number(item.pending || 0)],
+      ['Push fallidos', Number(item.failed || 0)],
+      ['Push enviados 24 h', Number(item.sent_24h || 0)]
+    ];
+    els['push-system-status'].innerHTML = cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
+
+    if (!els['notification-delivery-list']) return;
+    const rows = state.pushDeliveries || [];
+    els['notification-delivery-list'].innerHTML = rows.length
+      ? `<div class="table-wrap"><table><thead><tr><th>Canal</th><th>Usuario</th><th>Aviso</th><th>Estado</th><th>Intentos</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.channel || 'push')}</td><td>${escapeHtml(row.recipient_email || '—')}</td><td><strong>${escapeHtml(row.title || row.subject || 'Aviso')}</strong><br><span class="muted small">${escapeHtml(row.document_title || '')}</span></td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td>${row.notification_id ? `<button class="secondary" data-resend-notification="${row.notification_id}">Reenviar aviso</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">Todavía no hay entregas push.</div>';
+  }
+
+  async function activatePushNotifications() {
+    await run(async () => {
+      if (!PUSH_VAPID_PUBLIC_KEY) throw new Error('Falta la llave pública VAPID.');
+      if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones push web.');
+
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('No se concedió permiso para mostrar notificaciones.');
+
+      const registration = await getPushRegistration();
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)
+        });
+      }
+
+      const payload = subscription.toJSON();
+      const { error } = await client.rpc('upsert_push_subscription', {
+        p_endpoint: payload.endpoint,
+        p_p256dh: payload.keys?.p256dh || '',
+        p_auth: payload.keys?.auth || '',
+        p_user_agent: navigator.userAgent || '',
+        p_device_label: currentDeviceLabel()
+      });
+      if (error) throw error;
+
+      await loadPushSubscriptions();
+      await renderPushSubscriptionStatus();
+    }, 'Notificaciones activadas en este dispositivo.');
+  }
+
+  async function disablePushNotifications() {
+    await run(async () => {
+      const subscription = await currentPushSubscription();
+      if (subscription) {
+        const endpoint = subscription.endpoint;
+        await subscription.unsubscribe().catch(() => false);
+        const { error } = await client.rpc('deactivate_push_subscription', { p_endpoint: endpoint });
+        if (error) throw error;
+      }
+      await loadPushSubscriptions();
+      await renderPushSubscriptionStatus();
+    }, 'Notificaciones desactivadas en este dispositivo.');
+  }
+
+  async function processPushQueueNow(showSuccess = true) {
+    const { data, error } = await client.functions.invoke(PUSH_FUNCTION, {
+      body: { source: 'frontend', requested_at: new Date().toISOString() }
+    });
+    if (error) throw error;
+    if (showSuccess) toast(`Push procesado. Avisos enviados: ${Number(data?.processed || 0)}.`);
+    await loadPushSystemStatus();
+    renderPushSystemStatus();
+    return data;
+  }
+
+  async function sendTestPushNotification() {
+    await run(async () => {
+      const subscription = await currentPushSubscription();
+      if (!subscription) throw new Error('Primero activa las notificaciones en este dispositivo.');
+      const { error } = await client.rpc('send_test_push_notification');
+      if (error) throw error;
+      await processPushQueueNow(false);
+      await loadNotifications();
+      renderNotifications();
+    }, 'Prueba enviada al dispositivo.');
+  }
+
+  async function resendNotificationAllChannels(notificationId) {
+    await run(async () => {
+      const { error } = await client.rpc('admin_resend_notification', {
+        p_notification_id: Number(notificationId),
+        p_channels: ['email','push']
+      });
+      if (error) throw error;
+      await processPushQueueNow(false);
+      await Promise.all([loadEmailSystemStatus(), loadPushSystemStatus(), loadNotifications()]);
+      renderEmailSystemStatus();
+      renderPushSystemStatus();
+      renderNotifications();
+    }, 'Aviso reenviado por correo y push.');
+  }
+
+  function handleOpenIntentFromUrl() {
+    if (state.pushIntentHandled) return;
+    const params = new URLSearchParams(location.search || '');
+    const open = params.get('open') || '';
+    if (!open) return;
+    state.pushIntentHandled = true;
+    const target = ['tasks','notifications','documents'].includes(open) ? open : 'tasks';
+    setTimeout(() => navigate(target), 200);
+  }
+
   async function loadEmailSystemStatus() {
     if (!isAdmin()) { state.emailSystemStatus = null; state.emailDeliveries = []; return; }
     const [statusResponse, deliveriesResponse] = await Promise.all([
@@ -1610,7 +1893,7 @@
     els['email-system-status'].innerHTML = warning + cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
     if (!els['email-delivery-list']) return;
     const rows = state.emailDeliveries || [];
-    els['email-delivery-list'].innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Destinatario</th><th>Asunto</th><th>Estado</th><th>Intentos</th><th>Detalle</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.recipient_email)}</td><td>${escapeHtml(row.subject)}</td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${row.last_error ? escapeHtml(friendlyErrorMessage(row.last_error, 'El proveedor de correo rechazó el envío. Revisa los registros de la Edge Function.')) : '—'}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td>${row.status === 'failed' ? `<button class="secondary" data-retry-email="${row.id}">Reintentar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Todavía no hay correos en la cola.</div>';
+    els['email-delivery-list'].innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Destinatario</th><th>Asunto</th><th>Estado</th><th>Intentos</th><th>Detalle</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.recipient_email)}</td><td>${escapeHtml(row.subject)}</td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${row.last_error ? escapeHtml(friendlyErrorMessage(row.last_error, 'El proveedor de correo rechazó el envío. Revisa los registros de la Edge Function.')) : (row.provider_message_id ? `ID proveedor: ${escapeHtml(row.provider_message_id)}` : '—')}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td><div class="mini-actions">${row.status === 'failed' ? `<button class="secondary" data-retry-email="${row.id}">Reintentar correo</button>` : ''}${row.notification_id ? `<button class="secondary" data-resend-notification="${row.notification_id}">Reenviar aviso</button>` : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Todavía no hay correos en la cola.</div>';
   }
 
   function renderAll() {
@@ -1624,7 +1907,7 @@
     renderNotifications();
     renderConversations();
     updateUnreadBadges();
-    if (isAdmin()) { renderAdminUsers(); renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); }
+    if (isAdmin()) { renderAdminUsers(); renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderTemplateList(); }
     renderAccessRecoveryRequests();
   }
 
@@ -1967,6 +2250,63 @@
     </tbody></table></div>`;
   }
 
+  function getPrimaryScrollContainers() {
+    return [
+      document.scrollingElement,
+      document.documentElement,
+      document.body,
+      document.querySelector('#app-view .content'),
+      document.querySelector('.page-section:not(.hidden)'),
+      document.querySelector('#new-document-form'),
+      document.querySelector('dialog[open]')
+    ].filter(Boolean);
+  }
+
+  function scrollContainerToTop(container, behavior = 'auto') {
+    if (!container) return;
+
+    try {
+      if (container === document.body || container === document.documentElement || container === document.scrollingElement) {
+        window.scrollTo({ top: 0, left: 0, behavior });
+        container.scrollTop = 0;
+        container.scrollLeft = 0;
+        return;
+      }
+
+      container.scrollTo({ top: 0, left: 0, behavior });
+      container.scrollTop = 0;
+      container.scrollLeft = 0;
+    } catch {
+      container.scrollTop = 0;
+      container.scrollLeft = 0;
+    }
+  }
+
+  function scrollActiveViewToTop({ focusHeading = false } = {}) {
+    const containers = getPrimaryScrollContainers();
+
+    const apply = () => {
+      containers.forEach(container => scrollContainerToTop(container, 'auto'));
+
+      const activeSection = document.querySelector('.page-section:not(.hidden)');
+      if (activeSection) {
+        activeSection.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'auto' });
+      }
+
+      if (focusHeading) {
+        const heading = document.querySelector('#page-title') || document.querySelector('.page-section:not(.hidden) h2, .page-section:not(.hidden) h3');
+        if (heading) {
+          heading.setAttribute('tabindex', '-1');
+          heading.focus({ preventScroll: true });
+        }
+      }
+    };
+
+    apply();
+    requestAnimationFrame(apply);
+    setTimeout(apply, 80);
+  }
+
   function navigate(section) {
     closeOpenDialogs({ keepSecurity: true });
     if (!isActive() && ['new-document','tasks','documents','history','dashboard','messages','notifications'].includes(section)) section = 'profile';
@@ -1989,7 +2329,8 @@
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
     if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
     if (section === 'history') renderDocumentHistory();
-    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadAdminDashboard(), loadTemplates(), loadAccessRecoveryRequests()]).then(() => { renderEmailSystemStatus(); renderAdminDashboard(); renderTemplateList(); renderAccessRecoveryRequests(); }).catch(error => toast(error.message, true)); }
+    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadPushSystemStatus(), loadAdminDashboard(), loadTemplates(), loadAccessRecoveryRequests()]).then(() => { renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderTemplateList(); renderAccessRecoveryRequests(); }).catch(error => toast(error.message, true)); }
+    scrollActiveViewToTop({ focusHeading: true });
   }
 
   function allowedRolesForParticipant(role) {
@@ -2127,7 +2468,8 @@
     updateCollaborativeReviewControls(mode);
   }
 
-  function setWizardStep(step) {
+  function setWizardStep(step, { scrollTop = true } = {}) {
+    const previousStep = state.wizardStep;
     state.wizardStep = Math.max(1,Math.min(4,Number(step)||1));
     qsa('[data-wizard-step]').forEach(panel => panel.classList.toggle('hidden', Number(panel.dataset.wizardStep)!==state.wizardStep));
     qsa('[data-step-indicator]').forEach(item => {
@@ -2140,6 +2482,7 @@
     els['wizard-create'].classList.toggle('hidden',state.wizardStep!==4);
     els['wizard-message'].textContent = `Paso ${state.wizardStep} de 4`;
     if (state.wizardStep===4) renderWizardReview();
+    if (scrollTop && previousStep !== state.wizardStep) scrollActiveViewToTop({ focusHeading: false });
   }
 
   function validateWizardStep(step) {
@@ -2360,6 +2703,8 @@
       [docRes, participantsRes, versionsRes, attachmentsRes, eventsRes, signaturesRes, fieldsRes, reviewCommentsRes].forEach(r => { if (r.error) throw r.error; });
       renderDocumentDetail(docRes.data, participantsRes.data || [], versionsRes.data || [], attachmentsRes.data || [], eventsRes.data || [], signaturesRes.data || [], fieldsRes.data || [], reviewCommentsRes.data || []);
       if (!els['document-dialog'].open) els['document-dialog'].showModal();
+      scrollContainerToTop(els['document-dialog']);
+      scrollContainerToTop(els['document-detail']);
     });
   }
 
@@ -3284,8 +3629,8 @@
       els['selected-field-assignee'].innerHTML = options;
       els['prepare-page-count'].textContent = String(pdf.numPages);
       openExclusiveDialog(els['prepare-dialog']);
-      els['prepare-dialog'].scrollTop = 0;
-      els['prepare-pages'].scrollTop = 0;
+      scrollContainerToTop(els['prepare-dialog']);
+      scrollContainerToTop(els['prepare-pages']);
       await renderPreparePage();
     });
   }
@@ -3442,6 +3787,7 @@
       els['prepare-dialog'].close();
       syncDialogState();
       await refreshData();
+      scrollActiveViewToTop({ focusHeading: true });
     }, submit ? 'Posiciones guardadas y proceso iniciado.' : 'Posiciones de firma guardadas.');
   }
 
@@ -3476,6 +3822,8 @@
       };
       if (els['document-dialog'].open) els['document-dialog'].close();
       els['sign-dialog'].showModal();
+      scrollContainerToTop(els['sign-dialog']);
+      scrollContainerToTop(els['sign-pages']);
       await renderSigningPages(true);
       updateSignProgress();
       setTimeout(() => {
@@ -3846,7 +4194,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()]);
     renderAll();
   }
 
@@ -4550,6 +4898,11 @@
     });
     els['refresh-users'].addEventListener('click', async () => { await run(async () => { await loadProfiles(); renderAdminUsers(); }, 'Lista actualizada.'); });
     if (els['refresh-email-status']) els['refresh-email-status'].addEventListener('click', async () => { await run(async () => { await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Estado de correo actualizado.'); });
+    els['enable-push-notifications']?.addEventListener('click', activatePushNotifications);
+    els['disable-push-notifications']?.addEventListener('click', disablePushNotifications);
+    els['test-push-notification']?.addEventListener('click', sendTestPushNotification);
+    els['refresh-notification-evidence']?.addEventListener('click', async () => { await run(async () => { await loadPushSystemStatus(); renderPushSystemStatus(); }, 'Evidencia actualizada.'); });
+    els['process-push-now']?.addEventListener('click', async () => { await run(() => processPushQueueNow(false), 'Cola push procesada.'); });
     if (els['refresh-admin-dashboard']) els['refresh-admin-dashboard'].addEventListener('click', async () => { await run(async () => { await loadAdminDashboard(); renderAdminDashboard(); }, 'Indicadores actualizados.'); });
     if (els['refresh-templates']) els['refresh-templates'].addEventListener('click', async () => { await run(async () => { await loadTemplates(); renderTemplateList(); }, 'Plantillas actualizadas.'); });
 
@@ -4601,6 +4954,7 @@
       const open = e.target.closest('[data-open-document]'); if (open) return openDocument(open.dataset.openDocument);
       const documentChat = e.target.closest('[data-document-chat]'); if (documentChat) return openDocumentConversation(documentChat.dataset.documentChat);
       const retryEmail = e.target.closest('[data-retry-email]'); if (retryEmail) { await run(async () => { const { error } = await client.rpc('admin_retry_email', { p_outbox_id: Number(retryEmail.dataset.retryEmail) }); if (error) throw error; await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Correo colocado nuevamente en la cola.'); return; }
+      const resendNotification = e.target.closest('[data-resend-notification]'); if (resendNotification) return resendNotificationAllChannels(resendNotification.dataset.resendNotification);
       const preview = e.target.closest('[data-preview-document]'); if (preview) return openDocumentPreview(preview.dataset.previewDocument);
       const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName, currentDocumentContextId(dl.dataset.downloadPath));
       const replace = e.target.closest('[data-replace-document]'); if (replace) return replaceDocumentFile(replace.dataset.replaceDocument);
@@ -4638,9 +4992,12 @@
     ['pointerup','pointercancel','pointerleave'].forEach(type => canvas.addEventListener(type, () => { state.signatureDrawing = false; }));
     els['preview-dialog'].addEventListener('close', () => { state.preview = null; els['preview-pages'].innerHTML = ''; });
     window.addEventListener('resize', () => { if (!byId('section-profile').classList.contains('hidden')) prepareCanvas(); });
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && state.session) queueLiveRefresh('visibility'); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && state.session) { queueLiveRefresh('visibility'); renderPushSubscriptionStatus(); } });
     window.addEventListener('online', () => { setLiveStatus('syncing'); queueLiveRefresh('online'); });
     window.addEventListener('offline', () => setLiveStatus('disconnected'));
+    navigator.serviceWorker?.addEventListener?.('message', event => {
+      if (event.data?.type === 'LUMEN_SIGN_PUSH_CLICK') navigate('tasks');
+    });
     window.addEventListener('beforeunload', e => { if(state.profileDirty){e.preventDefault();e.returnValue='';} });
   }
 

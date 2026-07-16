@@ -1,0 +1,10 @@
+{
+  "name": "Lumen Sign",
+  "short_name": "Lumen Sign",
+  "description": "Aprobación y firma electrónica interna de documentos.",
+  "start_url": "./?open=tasks",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#17365f"
+}
