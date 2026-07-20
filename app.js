@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.6.0-push-reenvio-notificaciones';
+  const APP_VERSION = '8.6.2-mobile-pdf-firma-menu';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -56,6 +56,46 @@
   const els = {};
   const byId = (id) => document.getElementById(id);
   const qsa = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+
+  const PDF_DEFAULT_SCALE = 1.15;
+  const PDF_MIN_SCALE = 0.34;
+  const PDF_PREVIEW_MIN_SCALE = 0.32;
+
+  function clampNumber(value, min, max) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return min;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function isMobilePdfViewport() {
+    return window.matchMedia('(max-width: 760px)').matches || window.innerWidth <= 760;
+  }
+
+  function pdfZoomLabel(scale) {
+    return `${Math.round(Number(scale || PDF_DEFAULT_SCALE) * 100 / PDF_DEFAULT_SCALE)}%`;
+  }
+
+  function nextAnimationFrame() {
+    return new Promise(resolve => requestAnimationFrame(() => resolve()));
+  }
+
+  async function calculateInitialPdfScale(pdf, pageNumber, container, options = {}) {
+    if (!pdf || !container || !isMobilePdfViewport()) return PDF_DEFAULT_SCALE;
+    try {
+      await nextAnimationFrame();
+      const page = await pdf.getPage(pageNumber || 1);
+      const viewport = page.getViewport({ scale: 1 });
+      const rect = container.getBoundingClientRect();
+      const padding = Number(options.padding || 18);
+      const available = Math.max(240, rect.width - padding);
+      const raw = available / viewport.width;
+      return clampNumber(raw, options.min || PDF_MIN_SCALE, options.max || PDF_DEFAULT_SCALE);
+    } catch (error) {
+      console.warn('No se pudo calcular zoom inicial del PDF:', error);
+      return isMobilePdfViewport() ? 0.55 : PDF_DEFAULT_SCALE;
+    }
+  }
 
   function numberInputValue(id, fallback) {
     const input = byId(id);
@@ -3393,6 +3433,7 @@
       if (els['preview-download']) els['preview-download'].classList.toggle('hidden', !canDownloadDocument(bundle.doc));
       if (els['document-dialog']?.open) els['document-dialog'].close();
       els['preview-dialog'].showModal();
+      state.preview.zoom = await calculateInitialPdfScale(pdf, 1, els['preview-pages'], { min: PDF_PREVIEW_MIN_SCALE, max: PDF_DEFAULT_SCALE, padding: 20 });
       await renderPreviewPage();
     });
   }
@@ -3402,7 +3443,7 @@
     if (!preview) return;
     els['preview-page-number'].textContent = String(preview.page);
     els['preview-page-count'].textContent = String(preview.pageCount);
-    els['preview-zoom-label'].textContent = `${Math.round(preview.zoom * 100 / 1.15)}%`;
+    els['preview-zoom-label'].textContent = pdfZoomLabel(preview.zoom);
     await renderPdfPage(els['preview-pages'], preview.pdf, preview.page, preview.zoom, [], 'preview');
     els['preview-prev-page'].disabled = preview.page <= 1;
     els['preview-next-page'].disabled = preview.page >= preview.pageCount;
@@ -3479,7 +3520,7 @@
   const fieldTypeLabels = { signature: 'Firma' };
 
   function defaultFieldSize() {
-    return [30, 10];
+    return isMobilePdfViewport() ? [24, 7.5] : [28, 8.5];
   }
 
   async function getDocumentBundle(id, accessAction = 'document_viewed') {
@@ -3631,6 +3672,7 @@
       openExclusiveDialog(els['prepare-dialog']);
       scrollContainerToTop(els['prepare-dialog']);
       scrollContainerToTop(els['prepare-pages']);
+      state.prepare.zoom = await calculateInitialPdfScale(pdf, 1, els['prepare-pages'], { min: PDF_MIN_SCALE, max: PDF_DEFAULT_SCALE, padding: 20 });
       await renderPreparePage();
     });
   }
@@ -3639,8 +3681,92 @@
     const prepare = state.prepare;
     if (!prepare) return;
     els['prepare-page-number'].textContent = String(prepare.page);
-    els['prepare-zoom-label'].textContent = `${Math.round(prepare.zoom * 100 / 1.15)}%`;
+    els['prepare-zoom-label'].textContent = pdfZoomLabel(prepare.zoom);
     await renderPdfPage(els['prepare-pages'], prepare.pdf, prepare.page, prepare.zoom, prepare.fields, 'prepare');
+  }
+
+  function ensureFieldSizeControls() {
+    const panel = els['selected-field-panel'];
+    if (!panel) return null;
+    let controls = byId('selected-field-size-controls');
+    if (controls) return controls;
+
+    controls = document.createElement('div');
+    controls.id = 'selected-field-size-controls';
+    controls.className = 'field-size-controls';
+    controls.innerHTML = `
+      <hr>
+      <div class="field-size-header">
+        <strong>Tamaño del espacio</strong>
+        <span class="hint">Ajusta ancho y alto sin arrastrar el PDF.</span>
+      </div>
+      <label>Ancho
+        <input id="selected-field-width" type="range" min="8" max="60" step="0.5">
+        <output id="selected-field-width-output"></output>
+      </label>
+      <label>Alto
+        <input id="selected-field-height" type="range" min="4" max="22" step="0.5">
+        <output id="selected-field-height-output"></output>
+      </label>
+      <div class="field-size-buttons">
+        <button type="button" class="secondary" data-field-size-preset="compact">Compacto</button>
+        <button type="button" class="secondary" data-field-size-preset="recommended">Recomendado</button>
+        <button type="button" class="secondary" data-field-size-preset="wide">Ancho</button>
+      </div>`;
+    panel.append(controls);
+
+    controls.addEventListener('input', event => {
+      if (event.target?.matches?.('#selected-field-width,#selected-field-height')) updateSelectedFieldSizeFromControls();
+    });
+    controls.addEventListener('click', event => {
+      const button = event.target.closest('[data-field-size-preset]');
+      if (!button) return;
+      event.preventDefault();
+      const preset = button.dataset.fieldSizePreset;
+      const width = preset === 'compact' ? 20 : preset === 'wide' ? 34 : 26;
+      const height = preset === 'compact' ? 6 : preset === 'wide' ? 8 : 7.5;
+      applySelectedFieldSize(width, height, true);
+    });
+    return controls;
+  }
+
+  function updateFieldSizeControls(field) {
+    const controls = ensureFieldSizeControls();
+    if (!controls || !field) return;
+    const widthInput = byId('selected-field-width');
+    const heightInput = byId('selected-field-height');
+    const widthOutput = byId('selected-field-width-output');
+    const heightOutput = byId('selected-field-height-output');
+    if (widthInput) widthInput.value = String(clampNumber(field.width_pct, 8, 60));
+    if (heightInput) heightInput.value = String(clampNumber(field.height_pct, 4, 22));
+    if (widthOutput) widthOutput.textContent = `${Number(field.width_pct).toFixed(1)}%`;
+    if (heightOutput) heightOutput.textContent = `${Number(field.height_pct).toFixed(1)}%`;
+  }
+
+  function keepFieldInsidePage(field) {
+    field.width_pct = clampNumber(field.width_pct, 8, 70);
+    field.height_pct = clampNumber(field.height_pct, 4, 24);
+    field.x_pct = clampNumber(field.x_pct, 0, Math.max(0, 100 - field.width_pct));
+    field.y_pct = clampNumber(field.y_pct, 0, Math.max(0, 100 - field.height_pct));
+  }
+
+  function applySelectedFieldSize(width, height, rerender = false) {
+    const prepare = state.prepare;
+    const field = prepare?.fields.find(item => item.id === prepare.selectedId);
+    if (!field) return;
+    field.width_pct = clampNumber(width, 8, 70);
+    field.height_pct = clampNumber(height, 4, 24);
+    keepFieldInsidePage(field);
+    updateFieldSizeControls(field);
+    const element = els['prepare-pages']?.querySelector(`[data-field-id="${field.id}"]`);
+    if (element) positionOverlay(element, field);
+    if (rerender) renderPreparePage().then(() => selectPreparedField(field.id));
+  }
+
+  function updateSelectedFieldSizeFromControls() {
+    const width = byId('selected-field-width')?.value;
+    const height = byId('selected-field-height')?.value;
+    applySelectedFieldSize(width, height, false);
   }
 
   function selectPreparedField(id) {
@@ -3651,6 +3777,8 @@
     els['selected-field-panel'].classList.remove('hidden');
     els['selected-field-assignee'].value = field.assigned_to;
     els['selected-field-label'].value = field.label || 'Firma';
+    keepFieldInsidePage(field);
+    updateFieldSizeControls(field);
     qsa('.field-overlay', els['prepare-pages']).forEach(element => element.classList.toggle('selected', element.dataset.fieldId === id));
   }
 
@@ -3717,13 +3845,15 @@
       const dx = (moveEvent.clientX - startX) / rect.width * 100;
       const dy = (moveEvent.clientY - startY) / rect.height * 100;
       if (resizing) {
-        field.width_pct = Math.max(8, Math.min(100 - original.x, original.w + dx));
-        field.height_pct = Math.max(5, Math.min(100 - original.y, original.h + dy));
+        field.width_pct = clampNumber(original.w + dx, 8, Math.max(8, 100 - original.x));
+        field.height_pct = clampNumber(original.h + dy, 4, Math.max(4, 100 - original.y));
       } else {
-        field.x_pct = Math.max(0, Math.min(100 - original.w, original.x + dx));
-        field.y_pct = Math.max(0, Math.min(100 - original.h, original.y + dy));
+        field.x_pct = clampNumber(original.x + dx, 0, Math.max(0, 100 - original.w));
+        field.y_pct = clampNumber(original.y + dy, 0, Math.max(0, 100 - original.h));
       }
+      keepFieldInsidePage(field);
       positionOverlay(element, field);
+      updateFieldSizeControls(field);
     };
     const stop = () => {
       element.removeEventListener('pointermove', move);
@@ -3824,6 +3954,7 @@
       els['sign-dialog'].showModal();
       scrollContainerToTop(els['sign-dialog']);
       scrollContainerToTop(els['sign-pages']);
+      state.signing.zoom = await calculateInitialPdfScale(pdf, 1, els['sign-pages'], { min: PDF_MIN_SCALE, max: PDF_DEFAULT_SCALE, padding: 20 });
       await renderSigningPages(true);
       updateSignProgress();
       setTimeout(() => {
@@ -3841,7 +3972,7 @@
     const fragment = document.createDocumentFragment();
     for (let page = 1; page <= signing.pdf.numPages; page += 1) {
       const holder = document.createElement('div');
-      await renderPdfPage(holder, signing.pdf, page, 1.15, signing.fields, 'sign');
+      await renderPdfPage(holder, signing.pdf, page, signing.zoom || PDF_DEFAULT_SCALE, signing.fields, 'sign');
       while (holder.firstChild) fragment.append(holder.firstChild);
     }
     els['sign-pages'].innerHTML = '';
@@ -4872,13 +5003,13 @@
     els['prepare-prev-page'].addEventListener('click', () => { if(state.prepare && state.prepare.page>1){state.prepare.page--;renderPreparePage();} });
     els['prepare-next-page'].addEventListener('click', () => { if(state.prepare && state.prepare.page<state.prepare.pageCount){state.prepare.page++;renderPreparePage();} });
     els['prepare-zoom-in'].addEventListener('click', () => { if(state.prepare){state.prepare.zoom=Math.min(2,state.prepare.zoom+.15);renderPreparePage();} });
-    els['prepare-zoom-out'].addEventListener('click', () => { if(state.prepare){state.prepare.zoom=Math.max(.6,state.prepare.zoom-.15);renderPreparePage();} });
+    els['prepare-zoom-out'].addEventListener('click', () => { if(state.prepare){state.prepare.zoom=Math.max(PDF_MIN_SCALE,state.prepare.zoom-.15);renderPreparePage();} });
     ['selected-field-assignee','selected-field-label'].forEach(id => byId(id).addEventListener(id==='selected-field-label'?'input':'change', updateSelectedPreparedField));
     els['delete-field'].addEventListener('click', deletePreparedField);
     els['preview-prev-page'].addEventListener('click', () => { if (state.preview && state.preview.page > 1) { state.preview.page -= 1; renderPreviewPage(); } });
     els['preview-next-page'].addEventListener('click', () => { if (state.preview && state.preview.page < state.preview.pageCount) { state.preview.page += 1; renderPreviewPage(); } });
     els['preview-zoom-in'].addEventListener('click', () => { if (state.preview) { state.preview.zoom = Math.min(2.2, state.preview.zoom + 0.15); renderPreviewPage(); } });
-    els['preview-zoom-out'].addEventListener('click', () => { if (state.preview) { state.preview.zoom = Math.max(0.55, state.preview.zoom - 0.15); renderPreviewPage(); } });
+    els['preview-zoom-out'].addEventListener('click', () => { if (state.preview) { state.preview.zoom = Math.max(PDF_PREVIEW_MIN_SCALE, state.preview.zoom - 0.15); renderPreviewPage(); } });
     els['preview-back-document'].addEventListener('click', returnFromPreviewToDocument);
     els['preview-download'].addEventListener('click', downloadPreviewDocument);
     els['finish-signing'].addEventListener('click', finishVisualSigning);
@@ -4991,7 +5122,12 @@
     });
     ['pointerup','pointercancel','pointerleave'].forEach(type => canvas.addEventListener(type, () => { state.signatureDrawing = false; }));
     els['preview-dialog'].addEventListener('close', () => { state.preview = null; els['preview-pages'].innerHTML = ''; });
-    window.addEventListener('resize', () => { if (!byId('section-profile').classList.contains('hidden')) prepareCanvas(); });
+    window.addEventListener('resize', () => {
+      if (!byId('section-profile').classList.contains('hidden')) prepareCanvas();
+      if (state.prepare && els['prepare-dialog']?.open) renderPreparePage();
+      if (state.preview && els['preview-dialog']?.open) renderPreviewPage();
+      if (state.signing && els['sign-dialog']?.open) renderSigningPages(false);
+    });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && state.session) { queueLiveRefresh('visibility'); renderPushSubscriptionStatus(); } });
     window.addEventListener('online', () => { setLiveStatus('syncing'); queueLiveRefresh('online'); });
     window.addEventListener('offline', () => setLiveStatus('disconnected'));
