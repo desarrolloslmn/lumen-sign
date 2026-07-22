@@ -1844,11 +1844,22 @@
     }, 'Notificaciones desactivadas en este dispositivo.');
   }
 
-  async function processPushQueueNow(showSuccess = true) {
+  async function processPushQueueNow(showSuccess = true, options = {}) {
+    const { allowUnauthorized = false } = options;
     const { data, error } = await client.functions.invoke(PUSH_FUNCTION, {
-      body: { source: 'frontend', requested_at: new Date().toISOString() }
+      body: {
+        source: 'frontend',
+        requested_at: new Date().toISOString(),
+        selfOnly: !isAdmin()
+      }
     });
-    if (error) throw error;
+    if (error) {
+      if (allowUnauthorized) {
+        console.warn('No se pudo procesar push inmediatamente; el cron lo intentará automáticamente.', error);
+        return { ok: false, skipped: true, error: error.message || String(error) };
+      }
+      throw error;
+    }
     if (showSuccess) toast(`Push procesado. Avisos enviados: ${Number(data?.processed || 0)}.`);
     await loadPushSystemStatus();
     renderPushSystemStatus();
@@ -1861,10 +1872,10 @@
       if (!subscription) throw new Error('Primero activa las notificaciones en este dispositivo.');
       const { error } = await client.rpc('send_test_push_notification');
       if (error) throw error;
-      await processPushQueueNow(false);
+      await processPushQueueNow(false, { allowUnauthorized: true });
       await loadNotifications();
       renderNotifications();
-    }, 'Prueba enviada al dispositivo.');
+    }, 'Prueba enviada. Si no aparece al instante, espera hasta un minuto.');
   }
 
   async function resendNotificationAllChannels(notificationId) {
