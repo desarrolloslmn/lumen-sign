@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.6.4-bloqueo-firma-hasta-aprobacion';
+  const APP_VERSION = '8.6.5-mfa-mobile-acceso-privado';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -151,7 +151,7 @@
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
       'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-privacy-consent','sign-consent',
       'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
-      'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
+      'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-mobile-copy-secret','mfa-mobile-secret-copy','mfa-mobile-use-qr','mfa-mobile-use-manual','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
 
@@ -171,6 +171,9 @@
     ensureAccessRecoveryUi();
     ensureAdminRecoveryUi();
     ensurePushNotificationUi();
+    ensurePrivateAccessMeta();
+    ensurePrivateLoginNotice();
+    ensureMfaMobileSetupUi();
   }
 
   function friendlyErrorMessage(error, fallback = 'No fue posible completar la operación. Intenta nuevamente.') {
@@ -583,6 +586,213 @@
       input.remove();
       toast('Contraseña temporal copiada.');
     }
+  }
+
+
+
+  function ensurePrivateAccessMeta() {
+    if (!document.querySelector('meta[name="robots"]')) {
+      const meta = document.createElement('meta');
+      meta.name = 'robots';
+      meta.content = 'noindex,nofollow,noarchive,nosnippet,noimageindex';
+      document.head.appendChild(meta);
+    }
+    if (!document.querySelector('meta[name="googlebot"]')) {
+      const meta = document.createElement('meta');
+      meta.name = 'googlebot';
+      meta.content = 'noindex,nofollow,noarchive,nosnippet,noimageindex';
+      document.head.appendChild(meta);
+    }
+    document.documentElement.setAttribute('data-private-app', 'true');
+  }
+
+  function ensurePrivateLoginNotice() {
+    const authView = byId('auth-view');
+    const loginForm = byId('login-form');
+    if (!authView || byId('private-access-notice')) return;
+
+    const notice = document.createElement('section');
+    notice.id = 'private-access-notice';
+    notice.className = 'private-access-notice';
+    notice.setAttribute('role', 'note');
+    notice.innerHTML = `
+      <span class="private-access-kicker">Acceso privado</span>
+      <strong>Lumen Sign es una plataforma interna.</strong>
+      <span>Solo usuarios autorizados por Lumen pueden ingresar. No hay registro público y el acceso requiere contraseña y autenticador.</span>
+    `;
+
+    if (loginForm) loginForm.insertAdjacentElement('beforebegin', notice);
+    else authView.prepend(notice);
+  }
+
+  function isLikelyMobileViewport() {
+    return window.matchMedia('(max-width: 700px), (pointer: coarse)').matches;
+  }
+
+  async function copyTextToClipboard(value, message = 'Copiado.') {
+    const text = String(value || '').trim();
+    if (!text) {
+      toast('No hay clave disponible para copiar.', true);
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(message);
+      return true;
+    } catch {
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.setAttribute('readonly', '');
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      input.style.top = '0';
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      input.remove();
+      toast(message);
+      return true;
+    }
+  }
+
+  function setMfaSetupMode(mode) {
+    const dialog = byId('mfa-setup-dialog');
+    if (!dialog) return;
+    const nextMode = mode === 'manual' ? 'manual' : 'qr';
+    dialog.dataset.setupMode = nextMode;
+
+    byId('mfa-mobile-use-qr')?.classList.toggle('active', nextMode === 'qr');
+    byId('mfa-mobile-use-manual')?.classList.toggle('active', nextMode === 'manual');
+
+    const input = byId('mfa-setup-code');
+    if (nextMode === 'manual') {
+      byId('mfa-mobile-manual-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } else {
+      byId('mfa-qr')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    if (!isLikelyMobileViewport()) setTimeout(() => input?.focus(), 80);
+  }
+
+  function ensureMfaMobileSetupUi() {
+    const dialog = byId('mfa-setup-dialog');
+    const form = byId('mfa-setup-form');
+    if (!dialog || !form || dialog.dataset.mobileMfaEnhanced === 'true') return;
+
+    dialog.dataset.mobileMfaEnhanced = 'true';
+    dialog.classList.add('mfa-mobile-enhanced');
+
+    const title = dialog.querySelector('h2');
+    if (title && !title.dataset.mobileTextApplied) {
+      title.textContent = 'Configura tu autenticador';
+      title.dataset.mobileTextApplied = 'true';
+    }
+
+    const intro = document.createElement('div');
+    intro.id = 'mfa-mobile-intro';
+    intro.className = 'mfa-mobile-intro';
+    intro.innerHTML = `
+      <strong>Recomendado para primer ingreso:</strong>
+      <span>Haz este paso desde una computadora y escanea el QR con tu celular.</span>
+      <small>Compatible con Microsoft Authenticator y Google Authenticator en Android y iPhone.</small>
+    `;
+    if (title) title.insertAdjacentElement('afterend', intro);
+    else form.prepend(intro);
+
+    const chooser = document.createElement('div');
+    chooser.id = 'mfa-mobile-mode-switch';
+    chooser.className = 'mfa-mobile-mode-switch';
+    chooser.innerHTML = `
+      <button id="mfa-mobile-use-qr" type="button" class="active">
+        Estoy en computadora
+        <small>Escanear QR con mi celular</small>
+      </button>
+      <button id="mfa-mobile-use-manual" type="button">
+        Estoy en este celular
+        <small>Copiar clave manual</small>
+      </button>
+    `;
+    intro.insertAdjacentElement('afterend', chooser);
+
+    const qrBox = byId('mfa-qr')?.closest('.mfa-qr-box') || byId('mfa-qr')?.parentElement;
+    if (qrBox && !byId('mfa-qr-helper')) {
+      const helper = document.createElement('div');
+      helper.id = 'mfa-qr-helper';
+      helper.className = 'mfa-qr-helper';
+      helper.innerHTML = `
+        <strong>Computadora + celular</strong>
+        <span>Abre Microsoft Authenticator o Google Authenticator en tu celular y escanea este QR.</span>
+      `;
+      qrBox.prepend(helper);
+    }
+
+    const secretBox = byId('mfa-secret')?.closest('.mfa-secret-box') || byId('mfa-secret')?.parentElement;
+    if (secretBox && !byId('mfa-mobile-copy-secret')) {
+      const copyButton = document.createElement('button');
+      copyButton.id = 'mfa-mobile-copy-secret';
+      copyButton.type = 'button';
+      copyButton.className = 'secondary mfa-copy-secret-button';
+      copyButton.textContent = 'Copiar clave';
+      secretBox.appendChild(copyButton);
+    }
+
+    const manualPanel = document.createElement('section');
+    manualPanel.id = 'mfa-mobile-manual-panel';
+    manualPanel.className = 'mfa-mobile-manual-panel';
+    manualPanel.innerHTML = `
+      <div class="mfa-mobile-panel-header">
+        <strong>Si estás usando este mismo celular</strong>
+        <span>No necesitas escanear el QR. Copia la clave y agrégala manualmente en tu app autenticadora.</span>
+      </div>
+      <ol>
+        <li>Toca <strong>Copiar clave</strong>.</li>
+        <li>Abre Microsoft Authenticator o Google Authenticator.</li>
+        <li>Agrega una cuenta nueva.</li>
+        <li>Elige <strong>ingresar clave manualmente</strong> o <strong>otra cuenta</strong>.</li>
+        <li>Pega la clave, guarda la cuenta y regresa a Lumen Sign.</li>
+        <li>Escribe el código actual de 6 dígitos.</li>
+      </ol>
+      <div class="mfa-mobile-secret-card">
+        <span>Clave manual</span>
+        <code id="mfa-mobile-secret-copy">No disponible</code>
+        <button type="button" class="primary" id="mfa-mobile-copy-secret-inline">Copiar clave</button>
+      </div>
+    `;
+
+    const grid = dialog.querySelector('.mfa-setup-grid');
+    if (grid) grid.insertAdjacentElement('afterend', manualPanel);
+    else form.prepend(manualPanel);
+
+    const codeInput = byId('mfa-setup-code');
+    const codeLabel = codeInput?.closest('label');
+    if (codeLabel && !byId('mfa-mobile-code-help')) {
+      const help = document.createElement('div');
+      help.id = 'mfa-mobile-code-help';
+      help.className = 'mfa-mobile-code-help';
+      help.innerHTML = '<strong>Último paso:</strong> escribe aquí el código de 6 dígitos que aparece en tu app autenticadora.';
+      codeLabel.insertAdjacentElement('beforebegin', help);
+    }
+
+    const copySecret = async () => {
+      const secret = state.mfa?.enrollment?.totp?.secret || byId('mfa-secret')?.textContent || '';
+      await copyTextToClipboard(secret, 'Clave del autenticador copiada.');
+    };
+
+    byId('mfa-mobile-use-qr')?.addEventListener('click', () => setMfaSetupMode('qr'));
+    byId('mfa-mobile-use-manual')?.addEventListener('click', () => setMfaSetupMode('manual'));
+    byId('mfa-mobile-copy-secret')?.addEventListener('click', copySecret);
+    byId('mfa-mobile-copy-secret-inline')?.addEventListener('click', copySecret);
+
+    setMfaSetupMode(isLikelyMobileViewport() ? 'manual' : 'qr');
+  }
+
+  function updateMfaMobileSetupContent(enrollment) {
+    ensureMfaMobileSetupUi();
+    const secret = enrollment?.totp?.secret || 'No disponible';
+    const manualSecret = byId('mfa-mobile-secret-copy');
+    if (manualSecret) manualSecret.textContent = secret;
+    byId('mfa-mobile-copy-secret')?.toggleAttribute('disabled', !enrollment?.totp?.secret);
+    byId('mfa-mobile-copy-secret-inline')?.toggleAttribute('disabled', !enrollment?.totp?.secret);
+    setMfaSetupMode(isLikelyMobileViewport() ? 'manual' : 'qr');
   }
 
 
@@ -4609,12 +4819,13 @@
       els['mfa-qr'].classList.toggle('hidden', !qr);
     }
     if (els['mfa-secret']) els['mfa-secret'].textContent = enrollment?.totp?.secret || 'No disponible';
+    updateMfaMobileSetupContent(enrollment);
     ensureMfaErrorElement('setup');
     byId('mfa-setup-form')?.reset();
     clearMfaInlineError('setup');
     if (els['mfa-verify-dialog']?.open) els['mfa-verify-dialog'].close();
     if (!els['mfa-setup-dialog']?.open) els['mfa-setup-dialog']?.showModal();
-    setTimeout(() => byId('mfa-setup-code')?.focus(), 120);
+    if (!isLikelyMobileViewport()) setTimeout(() => byId('mfa-setup-code')?.focus(), 120);
   }
 
   function showMfaVerifyDialog() {
@@ -5033,7 +5244,10 @@
 
       closeMobileMenu();
     }, true);
-    window.addEventListener('resize', () => { if (window.matchMedia('(min-width: 901px)').matches) closeMobileMenu(); });
+    window.addEventListener('resize', () => {
+      if (window.matchMedia('(min-width: 901px)').matches) closeMobileMenu();
+      if (state.mfaRequiredActive && state.mfa?.mode === 'enroll') setMfaSetupMode(isLikelyMobileViewport() ? 'manual' : 'qr');
+    });
     els['document-search'].addEventListener('input', renderDocuments);
     els['document-status-filter'].addEventListener('change', renderDocuments);
     els['history-search']?.addEventListener('input', renderDocumentHistory);

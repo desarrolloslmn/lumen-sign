@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /
+
+# Lumen Sign es una aplicación interna. Esta indicación evita indexación,
+# pero la seguridad real sigue siendo Supabase Auth + MFA + RLS + Storage privado.

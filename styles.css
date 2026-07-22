@@ -2922,3 +2922,262 @@ dialog[open] > .toast{
 @media(max-width:900px){body.menu-open .mobile-bottom-nav{transform:translateY(120%);opacity:0;pointer-events:none}#app-view .sidebar{z-index:1300;padding-bottom:calc(1.25rem + env(safe-area-inset-bottom))}#app-view .sidebar-footer{margin-top:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom))}#logout-button{min-height:48px}}
 @media(max-width:760px){.pdf-toolbar{gap:.4rem;scrollbar-width:none}.pdf-toolbar::-webkit-scrollbar{display:none}.pdf-toolbar button{min-width:42px;min-height:42px}.pdf-pages{-webkit-overflow-scrolling:touch}.field-overlay{min-width:28px;min-height:20px;border-width:2px}.field-overlay .field-caption{right:26px;font-size:10px}.field-overlay .resize-handle{right:-12px;bottom:-12px;width:28px;height:28px;border-width:3px;box-shadow:0 8px 20px rgba(9,25,45,.2)}.field-overlay .sign-field-button{font-size:10px;line-height:1.05;padding:2px}.field-overlay .field-value{padding:2px}#prepare-dialog[open] .visual-layout{grid-template-rows:minmax(190px,35dvh) minmax(0,1fr)!important}#prepare-dialog[open] .field-panel{max-height:none!important}#prepare-dialog[open] .pdf-workspace{min-height:0!important}#prepare-dialog[open] .pdf-pages,#preview-dialog[open] .pdf-pages,#sign-dialog[open] #sign-pages{padding:.55rem .55rem calc(1rem + env(safe-area-inset-bottom))}#preview-dialog[open].preview-dialog,#preview-dialog[open].visual-dialog{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;padding:.65rem;border:0;border-radius:0;overflow:hidden}#preview-dialog[open] .preview-workspace,#preview-dialog[open] .pdf-workspace{height:calc(100dvh - 128px);min-height:0}#sign-dialog.visual-dialog[open]{grid-template-rows:auto auto auto minmax(0,1fr);padding:.65rem .65rem calc(.65rem + env(safe-area-inset-bottom))}#sign-dialog .visual-header{padding-right:3rem}#sign-dialog .visual-header h2{margin:.05rem 0 .2rem;font-size:clamp(1.3rem,6vw,1.65rem);line-height:1.05}#sign-dialog .visual-header p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:.84rem;line-height:1.3}#sign-dialog .signing-summary{align-items:stretch;gap:.45rem;padding:.55rem}#sign-dialog .signing-summary .button-row{display:grid;grid-template-columns:1fr;gap:.45rem}#sign-dialog .sign-guidance-panel{margin-bottom:.5rem}#sign-dialog #sign-pages{min-height:0;max-height:none;overflow:auto;border-radius:12px}#sign-dialog .visual-header .button-row{position:fixed;left:.55rem;right:.55rem;bottom:calc(.45rem + env(safe-area-inset-bottom));z-index:3040;display:grid;grid-template-columns:1fr;gap:.42rem;padding:.5rem;border:1px solid #d7e2ed;border-radius:16px;background:rgba(255,255,255,.98);box-shadow:0 -12px 30px rgba(9,25,45,.16)}#sign-dialog .visual-header .button-row button{min-height:44px}#sign-dialog #sign-pages{padding-bottom:calc(96px + env(safe-area-inset-bottom))}}
 @media(max-width:420px){.field-size-buttons{grid-template-columns:1fr}#prepare-dialog[open] .visual-layout{grid-template-rows:minmax(205px,38dvh) minmax(0,1fr)!important}}
+
+
+/* ============================================================
+   LUMEN SIGN v8.6.5 — Acceso privado visual + MFA mobile
+   ============================================================ */
+
+.private-access-notice{
+  display:grid;
+  gap:.35rem;
+  margin:0 0 1rem;
+  padding:1rem;
+  border:1px solid #bdd5ee;
+  border-radius:16px;
+  background:linear-gradient(180deg,#f8fbff,#eef6ff);
+  color:#0f2e50;
+  box-shadow:0 10px 24px rgba(12,31,50,.08);
+}
+
+.private-access-notice .private-access-kicker{
+  width:max-content;
+  padding:.18rem .55rem;
+  border-radius:999px;
+  background:#17365f;
+  color:#fff;
+  font-size:.72rem;
+  font-weight:900;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+
+.private-access-notice strong{
+  font-size:1.02rem;
+}
+
+.private-access-notice span:last-child{
+  color:#4d6580;
+  line-height:1.45;
+  font-size:.9rem;
+}
+
+.mfa-mobile-enhanced{
+  max-height:calc(100dvh - 1.5rem);
+  overflow:auto;
+}
+
+.mfa-mobile-intro{
+  display:grid;
+  gap:.25rem;
+  margin:.65rem 0 .85rem;
+  padding:1rem;
+  border:1px solid #bdd5ee;
+  border-radius:16px;
+  background:#f1f7fd;
+  color:#0f2e50;
+  line-height:1.42;
+}
+
+.mfa-mobile-intro strong{
+  font-size:.96rem;
+}
+
+.mfa-mobile-intro small{
+  color:#51708d;
+}
+
+.mfa-mobile-mode-switch{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:.65rem;
+  margin:.75rem 0 1rem;
+}
+
+.mfa-mobile-mode-switch button{
+  display:grid;
+  gap:.22rem;
+  min-height:70px;
+  padding:.75rem;
+  border:1px solid #cdddea;
+  border-radius:16px;
+  background:#fff;
+  color:#17365f;
+  text-align:left;
+  font-weight:900;
+  cursor:pointer;
+}
+
+.mfa-mobile-mode-switch button small{
+  color:#61758a;
+  font-weight:700;
+  line-height:1.25;
+}
+
+.mfa-mobile-mode-switch button.active{
+  border-color:#17365f;
+  box-shadow:0 0 0 3px rgba(23,54,95,.12);
+  background:#f7fbff;
+}
+
+.mfa-qr-helper{
+  display:grid;
+  gap:.2rem;
+  width:100%;
+  margin-bottom:.65rem;
+  color:#17365f;
+  text-align:center;
+  line-height:1.35;
+}
+
+.mfa-qr-helper span{
+  color:#58728c;
+  font-size:.84rem;
+}
+
+.mfa-copy-secret-button{
+  width:100%;
+  margin-top:.75rem;
+}
+
+.mfa-mobile-manual-panel{
+  display:grid;
+  gap:.75rem;
+  margin:.75rem 0 1rem;
+  padding:1rem;
+  border:1px solid #d4e2f0;
+  border-radius:18px;
+  background:#fbfdff;
+}
+
+.mfa-mobile-panel-header{
+  display:grid;
+  gap:.25rem;
+  color:#17365f;
+}
+
+.mfa-mobile-panel-header span{
+  color:#58728c;
+  line-height:1.4;
+  font-size:.9rem;
+}
+
+.mfa-mobile-manual-panel ol{
+  margin:.1rem 0;
+  padding-left:1.2rem;
+  color:#344d66;
+  line-height:1.48;
+}
+
+.mfa-mobile-manual-panel li{
+  margin:.24rem 0;
+}
+
+.mfa-mobile-secret-card{
+  display:grid;
+  gap:.55rem;
+  padding:.85rem;
+  border:1px dashed #a9c4dd;
+  border-radius:16px;
+  background:#f1f7fd;
+}
+
+.mfa-mobile-secret-card span{
+  color:#17365f;
+  font-weight:900;
+}
+
+.mfa-mobile-secret-card code{
+  display:block;
+  padding:.72rem;
+  border-radius:12px;
+  background:#0f2e50;
+  color:#fff;
+  word-break:break-all;
+  letter-spacing:.06em;
+  line-height:1.45;
+}
+
+.mfa-mobile-code-help{
+  margin:.65rem 0 .4rem;
+  padding:.75rem .85rem;
+  border:1px solid #bdd5ee;
+  border-radius:14px;
+  background:#fff;
+  color:#17365f;
+  line-height:1.4;
+  font-size:.9rem;
+}
+
+.mfa-mobile-enhanced[data-setup-mode="qr"] #mfa-mobile-manual-panel{
+  display:none;
+}
+
+.mfa-mobile-enhanced[data-setup-mode="manual"] .mfa-qr-box{
+  display:none;
+}
+
+@media(max-width:700px){
+  .private-access-notice{
+    margin-bottom:.85rem;
+    padding:.85rem;
+    border-radius:14px;
+  }
+
+  .mfa-mobile-enhanced{
+    width:100vw!important;
+    max-width:100vw!important;
+    min-height:100dvh!important;
+    max-height:100dvh!important;
+    margin:0!important;
+    border-radius:0!important;
+    padding:1rem!important;
+    padding-bottom:calc(1rem + env(safe-area-inset-bottom))!important;
+  }
+
+  .mfa-mobile-enhanced h2{
+    font-size:1.45rem;
+    line-height:1.12;
+    margin-bottom:.5rem;
+  }
+
+  .mfa-mobile-mode-switch{
+    grid-template-columns:1fr;
+    gap:.55rem;
+  }
+
+  .mfa-mobile-mode-switch button{
+    min-height:64px;
+  }
+
+  .mfa-mobile-manual-panel{
+    padding:.85rem;
+    border-radius:16px;
+  }
+
+  .mfa-mobile-manual-panel ol{
+    font-size:.88rem;
+  }
+
+  #mfa-setup-code,
+  #mfa-verify-code{
+    min-height:56px;
+    font-size:1.55rem;
+  }
+
+  .mfa-mobile-enhanced .button-row{
+    position:sticky;
+    bottom:0;
+    z-index:8;
+    margin:.8rem -.15rem 0;
+    padding:.65rem;
+    border:1px solid #dce6f0;
+    border-radius:16px;
+    background:rgba(255,255,255,.98);
+    box-shadow:0 -10px 28px rgba(7,28,52,.12);
+  }
+
+  .mfa-mobile-enhanced .button-row button{
+    min-height:48px;
+  }
+}
