@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.6.2-mobile-pdf-firma-menu';
+  const APP_VERSION = '8.6.4-bloqueo-firma-hasta-aprobacion';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -1354,6 +1354,48 @@
     return roles;
   }
 
+  function pendingApprovalsForParticipants(participants = []) {
+    return (participants || []).filter(item =>
+      item.participant_role === 'approver'
+      && item.action_status === 'pending'
+    );
+  }
+
+  function signatureStageReadyForDocument(doc, participants = []) {
+    return doc?.status === 'awaiting_signature'
+      && pendingApprovalsForParticipants(participants).length === 0;
+  }
+
+  function currentPendingSignerForUser(participants = [], userId = state.session?.user?.id) {
+    const pendingSigners = (participants || []).filter(item =>
+      item.participant_role === 'signer'
+      && item.action_status === 'pending'
+    );
+    if (!pendingSigners.length) return null;
+    const minSequence = Math.min(...pendingSigners.map(item => Number(item.sequence)));
+    return pendingSigners.find(item =>
+      item.user_id === userId
+      && Number(item.sequence) === minSequence
+    ) || null;
+  }
+
+  function signatureBlockMessage(doc, participants = []) {
+    if (!doc) return 'No se pudo validar el expediente.';
+    if (doc.status === 'paused') return 'El proceso está pausado. No se puede firmar hasta que se reanude.';
+    if (doc.status === 'cancelled') return 'El proceso fue cancelado. Ya no se puede firmar.';
+    if (doc.status === 'completed') return 'El documento ya fue completado.';
+    if (doc.status !== 'awaiting_signature') return 'La firma todavía no está disponible. Primero debe terminar la etapa de aprobación.';
+    const pendingApprovers = pendingApprovalsForParticipants(participants);
+    if (pendingApprovers.length) {
+      const names = pendingApprovers.map(item => profileName(item.user_id)).filter(Boolean);
+      return names.length
+        ? `La firma todavía no está disponible. Falta aprobación de: ${names.join(', ')}.`
+        : 'La firma todavía no está disponible. Faltan aprobaciones pendientes.';
+    }
+    if (!currentPendingSignerForUser(participants)) return 'La firma todavía no está disponible para ti. Espera tu turno o revisa la asignación.';
+    return '';
+  }
+
   async function loadTasks() {
     if (!isActive()) { state.tasks = []; return; }
     const { data, error } = await client.from('document_participants')
@@ -1376,19 +1418,31 @@
       allPending = response.data || [];
     }
     state.tasks = mine.map(task => {
-      const expectedRole = task.documents.status === 'awaiting_approval' ? 'approver'
+      const pendingApprovers = allPending.filter(row =>
+        row.document_id === task.document_id
+        && row.participant_role === 'approver'
+      );
+      const signatureBlockedByApprovals = task.documents.status === 'awaiting_signature' && pendingApprovers.length > 0;
+      const expectedRole = task.documents.status === 'awaiting_approval' || signatureBlockedByApprovals ? 'approver'
         : task.documents.status === 'awaiting_signature' ? 'signer' : null;
-      const stageRows = allPending.filter(row => row.document_id === task.document_id && row.participant_role === expectedRole);
+      const stageRows = expectedRole
+        ? allPending.filter(row => row.document_id === task.document_id && row.participant_role === expectedRole)
+        : [];
       const minSequence = stageRows.length ? Math.min(...stageRows.map(row => Number(row.sequence))) : null;
       const blockers = minSequence === null
         ? []
         : stageRows.filter(row => Number(row.sequence) === minSequence);
-      const isActionable = task.participant_role === expectedRole && Number(task.sequence) === minSequence;
+      const isActionable = Boolean(expectedRole)
+        && task.participant_role === expectedRole
+        && Number(task.sequence) === minSequence
+        && !(task.participant_role === 'signer' && signatureBlockedByApprovals);
       const waitingReason = task.documents.status === 'paused' ? 'El proceso está pausado por el propietario o un administrador.'
         : task.documents.status === 'cancelled' ? 'El proceso fue cancelado.'
-        : expectedRole !== task.participant_role
-          ? (expectedRole === 'approver' ? 'La etapa de aprobación todavía no termina.' : 'La etapa de firma todavía no inicia.')
-          : !isActionable ? 'Existe una persona pendiente antes de tu turno.' : '';
+        : signatureBlockedByApprovals && task.participant_role === 'signer'
+          ? 'La firma todavía no está disponible. Faltan aprobaciones pendientes.'
+          : expectedRole !== task.participant_role
+            ? (expectedRole === 'approver' ? 'La etapa de aprobación todavía no termina.' : 'La etapa de firma todavía no inicia.')
+            : !isActionable ? 'Existe una persona pendiente antes de tu turno.' : '';
       return {
         ...task,
         is_actionable: isActionable,
@@ -2823,12 +2877,16 @@
 
   function renderDocumentDetail(doc, participants, versions, attachments, events, signatures, fields = [], reviewComments = []) {
     const me = state.session.user.id;
-    const currentRole = doc.status === 'awaiting_approval' ? 'approver' : doc.status === 'awaiting_signature' ? 'signer' : null;
-    const stagePending = participants.filter(item => item.participant_role === currentRole && item.action_status === 'pending');
+    const pendingApprovers = pendingApprovalsForParticipants(participants);
+    const signatureBlockedByApprovals = doc.status === 'awaiting_signature' && pendingApprovers.length > 0;
+    const signatureStageReady = signatureStageReadyForDocument(doc, participants);
+    const currentRole = doc.status === 'awaiting_approval' || signatureBlockedByApprovals ? 'approver'
+      : signatureStageReady ? 'signer' : null;
+    const stagePending = currentRole ? participants.filter(item => item.participant_role === currentRole && item.action_status === 'pending') : [];
     const minSequence = stagePending.length ? Math.min(...stagePending.map(item => Number(item.sequence))) : null;
     const currentPending = stagePending.filter(item => Number(item.sequence) === minSequence);
     const myApproval = participants.find(item => item.user_id === me && item.participant_role === 'approver' && item.action_status === 'pending' && Number(item.sequence) === minSequence);
-    const mySignature = participants.find(item => item.user_id === me && item.participant_role === 'signer' && item.action_status === 'pending' && Number(item.sequence) === minSequence);
+    const mySignature = signatureStageReady ? participants.find(item => item.user_id === me && item.participant_role === 'signer' && item.action_status === 'pending' && Number(item.sequence) === minSequence) : null;
     const myPendingSignature = participants.find(item => item.user_id === me && item.participant_role === 'signer' && item.action_status === 'pending');
     const isAssignedEditor = participants.some(item => item.user_id === me && item.participant_role === 'editor');
     const canConfigure = doc.status === 'draft' && (doc.owner_id === me || isAdmin() || isContracts() || isAssignedEditor);
@@ -2874,11 +2932,13 @@
     else if (doc.status === 'awaiting_approval') guidance = isCollaborativeReview
       ? (myApproval ? 'Revisa el PDF, comenta y da tu visto bueno. Si no respondes dentro del plazo, se registrará sin observaciones y el flujo continuará.' : 'La revisión está abierta. El silencio al vencer no detendrá el proceso.')
       : (myApproval ? 'Es tu turno de revisar y decidir.' : 'El documento está esperando a la persona que debe aprobar antes.');
-    else if (doc.status === 'awaiting_signature') guidance = mySignature
-      ? 'Es tu turno de revisar y colocar tu firma.'
-      : myPendingSignature
-        ? `Antes de tu turno debe firmar: ${nextActor}.`
-        : `El documento está esperando la firma de: ${nextActor}.`;
+    else if (doc.status === 'awaiting_signature') guidance = signatureBlockedByApprovals
+      ? `La firma está bloqueada hasta que termine la aprobación. Pendiente: ${nextActor}.`
+      : mySignature
+        ? 'Es tu turno de revisar y colocar tu firma.'
+        : myPendingSignature
+          ? `Antes de tu turno debe firmar: ${nextActor}.`
+          : `El documento está esperando la firma de: ${nextActor}.`;
     else if (doc.status === 'completed') guidance = 'El proceso terminó. La versión actual contiene las firmas aplicadas.';
     else if (doc.status === 'rejected') guidance = 'El documento fue rechazado. Crea una corrección conservando el historial original.';
     else if (doc.status === 'paused') guidance = 'El proceso está pausado. Nadie puede aprobar ni firmar hasta que se reanude.';
@@ -3937,6 +3997,8 @@
     if (!defaultSignature) throw new Error('Primero registra una firma en Perfil y firma.');
     await run(async () => {
       const bundle = await getDocumentBundle(id, 'document_signing_viewed');
+      const blockMessage = signatureBlockMessage(bundle.doc, bundle.participants);
+      if (blockMessage) throw new Error(blockMessage);
       const mine = bundle.fields.filter(field => field.assigned_to === state.session.user.id);
       if (!mine.length) throw new Error('No tienes espacios de firma asignados.');
       const { data: signatureUrl, error: signatureError } = await client.storage.from('signatures').createSignedUrl(defaultSignature.storage_path, 300);
