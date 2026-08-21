@@ -105,7 +105,7 @@
         <button data-section="notifications" class="nav-item"><span>🔔</span>Notificaciones <b id="notification-unread-badge" class="nav-badge hidden">0</b></button>
         <button data-section="new-document" class="nav-item"><span>＋</span>Crear documento</button>
         <button data-section="profile" class="nav-item"><span>◯</span>Perfil y firma</button>
-        <button data-section="admin" id="admin-nav" class="nav-item hidden"><span>⚙</span>Usuarios</button>
+        <button data-section="admin" id="admin-nav" class="nav-item hidden"><span>⚙</span>Administración</button>
       </nav>
       <aside id="sidebar-reminder" class="sidebar-reminder hidden" aria-live="polite">
         <div class="sidebar-reminder-head">
@@ -395,7 +395,38 @@
           <div><p class="eyebrow dark">Administración</p><h2>Personas y permisos</h2><p>Primero activa la cuenta y después asigna una función. El sistema filtra automáticamente quién puede aprobar o firmar.</p></div>
           <div class="role-legend"><span><b>Aprobador</b> revisa y autoriza</span><span><b>Firmante</b> aplica su firma</span><span><b>Contratos</b> crea y corrige documentos</span></div>
         </div>
-        <div class="panel">
+
+        <div id="superadmin-process-panel" class="panel superadmin-only hidden">
+          <div class="panel-header wrap">
+            <div>
+              <p class="eyebrow dark">Supervisión exclusiva</p>
+              <h2>Procesos y responsables</h2>
+              <p class="muted small">Consulta hasta 500 procesos prioritarios: cuáles iniciaron, cuáles están por vencer y quién falta por aprobar o firmar.</p>
+            </div>
+            <button id="refresh-process-control" class="secondary" type="button">Actualizar procesos</button>
+          </div>
+          <div id="process-control-metrics" class="admin-metrics process-control-metrics"></div>
+          <div class="oversight-toolbar" aria-label="Filtros de supervisión">
+            <label>Situación
+              <select id="process-control-filter">
+                <option value="all">Todos los procesos</option>
+                <option value="in_progress">En curso</option>
+                <option value="started">Ya iniciados</option>
+                <option value="pending_approval">Pendientes de aprobación</option>
+                <option value="pending_signature">Pendientes de firma</option>
+                <option value="due_soon">Por vencer en 3 días</option>
+                <option value="overdue">Vencidos con pendientes</option>
+                <option value="completed">Completados</option>
+              </select>
+            </label>
+            <label class="oversight-search">Buscar
+              <input id="process-control-search" type="search" placeholder="Proceso, responsable o correo" autocomplete="off" />
+            </label>
+          </div>
+          <div id="process-control-list" class="process-control-list"></div>
+        </div>
+
+        <div id="admin-operations-panel" class="panel superadmin-only hidden">
           <div class="panel-header wrap"><div><p class="eyebrow dark">Indicadores</p><h2>Control operativo</h2><p class="muted small">Resumen de documentos, vencimientos y tiempos del proceso.</p></div><button id="refresh-admin-dashboard" class="secondary" type="button">Actualizar indicadores</button></div>
           <div id="admin-dashboard" class="admin-metrics"></div>
         </div>
@@ -403,16 +434,57 @@
           <div class="panel-header wrap"><div><h2>Usuarios registrados</h2><p class="muted small">Solo el superadministrador puede crear otros administradores.</p></div><button id="refresh-users" class="secondary" type="button">Actualizar</button></div>
           <div id="admin-users-table"></div>
         </div>
-        <div class="panel">
+        <div id="email-admin-panel" class="panel superadmin-only hidden">
           <div class="panel-header wrap">
             <div>
-              <p class="eyebrow dark">Entrega</p>
+              <p class="eyebrow dark">Control exclusivo del superadministrador</p>
               <h2>Correos automáticos</h2>
-              <p class="muted small">Consulta la cola, los envíos recientes y los intentos fallidos.</p>
+              <p class="muted small">Decide qué avisos automáticos se envían y consulta hasta 500 entregas recientes.</p>
             </div>
             <button id="refresh-email-status" class="secondary" type="button">Actualizar correos</button>
           </div>
+          <form id="email-control-form" class="email-control-form">
+            <div class="email-control-copy">
+              <strong>Política de avisos</strong>
+              <span>Las asignaciones iniciales y solicitudes de firma o aprobación siempre permanecen activas.</span>
+            </div>
+            <label class="email-control-option"><input id="email-control-warning" type="checkbox" /> <span><b>Aviso próximo a vencer</b><small>Un aviso preventivo antes de la fecha límite.</small></span></label>
+            <label class="email-control-option"><input id="email-control-reminder" type="checkbox" /> <span><b>Recordatorios repetitivos</b><small>Correos mientras la tarea siga pendiente.</small></span></label>
+            <label class="email-control-option"><input id="email-control-expired" type="checkbox" /> <span><b>Aviso de tarea vencida</b><small>Máximo una vez por proceso y destinatario.</small></span></label>
+            <label>Separación mínima entre recordatorios
+              <select id="email-control-cooldown">
+                <option value="24">24 horas</option>
+                <option value="48">48 horas</option>
+                <option value="72">72 horas</option>
+                <option value="168">7 días</option>
+              </select>
+            </label>
+            <button class="primary" type="submit">Guardar política</button>
+          </form>
           <div id="email-system-status" class="email-status-grid"></div>
+          <div class="oversight-toolbar email-log-toolbar" aria-label="Filtros del historial de correo">
+            <label>Tipo
+              <select id="email-log-kind-filter">
+                <option value="all">Todos</option>
+                <option value="assignment">Asignaciones</option>
+                <option value="task_reminder">Recordatorios</option>
+                <option value="deadline_warning">Próximos a vencer</option>
+                <option value="deadline_expired">Vencidos</option>
+              </select>
+            </label>
+            <label>Estado
+              <select id="email-log-status-filter">
+                <option value="all">Todos</option>
+                <option value="sent">Enviados</option>
+                <option value="pending">Pendientes</option>
+                <option value="failed">Fallidos</option>
+                <option value="cancelled">Detenidos</option>
+              </select>
+            </label>
+            <label class="oversight-search">Buscar
+              <input id="email-log-search" type="search" placeholder="Proceso, persona, correo o asunto" autocomplete="off" />
+            </label>
+          </div>
           <div id="email-delivery-list"></div>
         </div>
 

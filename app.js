@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.6.5-mfa-mobile-acceso-privado';
+  const APP_VERSION = '8.7.0-supervision-superadmin';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -50,7 +50,8 @@
     chatChannel: null, chatInboxChannel: null, notificationChannel: null, workflowChannel: null, membershipChannel: null,
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
-    emailSystemStatus: null, emailDeliveries: [], pushSubscriptions: [], pushSystemStatus: null, pushDeliveries: [], pushIntentHandled: false, templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
+    emailSystemStatus: null, emailSystemError: null, emailDeliveries: [], superadminProcesses: [], superadminProcessError: null, superadminEmailControls: null,
+    pushSubscriptions: [], pushSystemStatus: null, pushDeliveries: [], pushIntentHandled: false, templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -112,6 +113,7 @@
   const isSuperAdmin = () => state.profile?.role === 'superadmin';
   const isContracts = () => state.profile?.role === 'contracts';
   const isActive = () => state.profile?.status === 'active';
+  const canUseSuperadminOversight = () => isActive() && isSuperAdmin();
   const canStartProcess = () => isActive() && (isAdmin() || isContracts());
 
   const roleLabels = {
@@ -145,11 +147,12 @@
       'prepare-pages','prepare-page-number','prepare-page-count','prepare-prev-page','prepare-next-page','prepare-zoom-in','prepare-zoom-out','prepare-zoom-label',
       'sign-dialog','sign-pages','finish-signing','sign-progress','next-required-field',
       'preview-dialog','preview-title','preview-pages','preview-page-number','preview-page-count','preview-prev-page','preview-next-page','preview-zoom-in','preview-zoom-out','preview-zoom-label','preview-back-document','preview-download',
-      'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list',
+      'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list','email-admin-panel',
+      'email-control-form','email-control-warning','email-control-reminder','email-control-expired','email-control-cooldown','email-log-kind-filter','email-log-status-filter','email-log-search',
       'push-profile-panel','push-device-status','enable-push-notifications','test-push-notification','disable-push-notifications',
       'notification-evidence-admin-panel','push-system-status','notification-delivery-list','refresh-notification-evidence','process-push-now',
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
-      'admin-dashboard','refresh-admin-dashboard','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-privacy-consent','sign-consent',
+      'admin-dashboard','refresh-admin-dashboard','admin-operations-panel','superadmin-process-panel','refresh-process-control','process-control-metrics','process-control-filter','process-control-search','process-control-list','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-privacy-consent','sign-consent',
       'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
       'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-mobile-copy-secret','mfa-mobile-secret-copy','mfa-mobile-use-qr','mfa-mobile-use-manual','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
     ].forEach(id => els[id] = byId(id));
@@ -1367,7 +1370,7 @@
     await Promise.all([
       loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(),
       loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(),
-      loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()
+      loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadAccessRecoveryRequests()
     ]);
     renderAll();
     handleOpenIntentFromUrl();
@@ -1382,6 +1385,7 @@
     if (!session) {
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
       state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null; state.accessRecoveryRequests = [];
+      state.adminDashboard = null; state.superadminProcesses = []; state.superadminProcessError = null; state.superadminEmailControls = null; state.emailSystemStatus = null; state.emailSystemError = null; state.emailDeliveries = [];
       clearForcePasswordDialog(); clearMfaDialogs(); stopLiveSync();
       setSecurityGateLocked(false);
       showAuth(); return;
@@ -1462,10 +1466,27 @@
   }
 
   async function loadAdminDashboard() {
-    if (!isAdmin()) { state.adminDashboard = null; return; }
+    if (!canUseSuperadminOversight()) { state.adminDashboard = null; return; }
     const { data, error } = await client.rpc('get_admin_dashboard');
     if (error) throw error;
     state.adminDashboard = data || {};
+  }
+
+  async function loadSuperadminProcessControl(throwOnError = false) {
+    if (!canUseSuperadminOversight()) { state.superadminProcesses = []; state.superadminProcessError = null; return; }
+    const { data, error } = await client.rpc('superadmin_list_process_control', {
+      p_scope: 'all',
+      p_search: null,
+      p_limit: 500
+    });
+    if (error) {
+      console.warn('No se pudo cargar el control global de procesos.', error);
+      state.superadminProcessError = error.message || 'No se pudo consultar la supervisión de procesos.';
+      if (throwOnError) throw error;
+      return;
+    }
+    state.superadminProcessError = null;
+    state.superadminProcesses = Array.isArray(data) ? data : [];
   }
 
   function renderTemplateOptions() {
@@ -1485,7 +1506,7 @@
   }
 
   function renderAdminDashboard() {
-    if (!els['admin-dashboard']) return;
+    if (!canUseSuperadminOversight() || !els['admin-dashboard']) return;
     const data = state.adminDashboard || {};
     const cards = [
       ['Documentos', data.documents_total ?? 0],
@@ -1498,6 +1519,94 @@
       ['Promedio de cierre', `${data.avg_completion_hours ?? 0} h`]
     ];
     els['admin-dashboard'].innerHTML = cards.map(([label,value]) => `<div class="metric-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+  }
+
+  function processDeadlineLabel(item) {
+    if (item.deadline_state === 'overdue') return `<span class="pill danger">Vencido ${Math.abs(Number(item.days_remaining || 0))} d</span>`;
+    if (item.deadline_state === 'due_soon') return `<span class="pill warning">Vence en ${Math.max(0, Number(item.days_remaining || 0))} d</span>`;
+    if (item.deadline_state === 'closed') return '<span class="pill success">Cerrado</span>';
+    if (!item.due_at) return '<span class="pill soft">Sin fecha límite</span>';
+    return `<span class="pill soft">${fmtDate(item.due_at)}</span>`;
+  }
+
+  function processControlMatches(item) {
+    const scope = els['process-control-filter']?.value || 'all';
+    const search = String(els['process-control-search']?.value || '').trim().toLowerCase();
+    const status = String(item.status || '');
+    const isOpenProcess = ['awaiting_approval','awaiting_signature','paused'].includes(status);
+    const matchesScope = scope === 'all'
+      || (scope === 'in_progress' && ['awaiting_approval','awaiting_signature','paused'].includes(status))
+      || (scope === 'pending_approval' && isOpenProcess && Boolean(item.started_at) && item.current_stage === 'approval' && Number(item.pending_approvers || 0) > 0)
+      || (scope === 'pending_signature' && isOpenProcess && Boolean(item.started_at) && item.current_stage === 'signature' && Number(item.pending_signers || 0) > 0)
+      || (scope === 'started' && Boolean(item.started_at))
+      || (scope === 'due_soon' && item.deadline_state === 'due_soon')
+      || (scope === 'overdue' && item.deadline_state === 'overdue')
+      || (scope === 'completed' && status === 'completed');
+    if (!matchesScope) return false;
+    if (!search) return true;
+    const participants = Array.isArray(item.participants) ? item.participants : [];
+    const haystack = [item.title, item.owner_name, item.owner_email, status, ...participants.flatMap(person => [person.full_name, person.email])]
+      .filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(search);
+  }
+
+  function participantActionLabel(person) {
+    let label = participantRoleLabels[person.participant_role] || person.participant_role || 'Participante';
+    if (person.decision_source === 'deadline_no_objection') label = 'Sin objeción por vencimiento';
+    else if (person.participant_role === 'approver') label = person.action_status === 'approved' ? 'Aprobó' : person.action_status === 'rejected' ? 'Rechazó' : 'Debe aprobar';
+    else if (person.participant_role === 'signer') label = person.action_status === 'signed' ? 'Firmó' : 'Debe firmar';
+    if (person.action_status === 'pending' && person.profile_status && person.profile_status !== 'active') return `${label} · cuenta no activa`;
+    return label;
+  }
+
+  function renderSuperadminProcessControl() {
+    if (!canUseSuperadminOversight() || !els['process-control-list']) return;
+    const all = state.superadminProcesses || [];
+    const reportedTotal = Number(all[0]?.total_process_count ?? all.length);
+    const metrics = [
+      ['Procesos mostrados', all.length],
+      ['Iniciados', all.filter(item => Boolean(item.started_at)).length],
+      ['En aprobación', all.filter(item => Boolean(item.started_at) && ['awaiting_approval','awaiting_signature','paused'].includes(item.status) && item.current_stage === 'approval').length],
+      ['En firma', all.filter(item => Boolean(item.started_at) && ['awaiting_approval','awaiting_signature','paused'].includes(item.status) && item.current_stage === 'signature').length],
+      ['Por vencer', all.filter(item => item.deadline_state === 'due_soon').length],
+      ['Vencidos pendientes', all.filter(item => item.deadline_state === 'overdue').length]
+    ];
+    if (els['process-control-metrics']) {
+      els['process-control-metrics'].innerHTML = metrics.map(([label, value]) => `<div class="metric-card"><span>${escapeHtml(label)}</span><strong>${Number(value || 0)}</strong></div>`).join('');
+    }
+    const rows = all.filter(processControlMatches);
+    const resultNotice = reportedTotal > all.length
+      ? `<div class="email-system-warning"><strong>Vista limitada a ${all.length} procesos.</strong><span>Hay ${reportedTotal} en total. La lista prioriza vencidos, próximos a vencer y procesos activos.</span></div>`
+      : '';
+    const loadError = state.superadminProcessError
+      ? `<div class="email-system-warning danger"><strong>No se pudo actualizar la supervisión.</strong><span>${escapeHtml(state.superadminProcessError)}</span></div>`
+      : '';
+    const cards = rows.length ? rows.map(item => {
+      const participants = Array.isArray(item.participants) ? item.participants : [];
+      const isClosedProcess = ['completed','cancelled','rejected'].includes(item.status);
+      const pending = isClosedProcess ? [] : participants.filter(person => person.action_status === 'pending');
+      return `<article class="process-control-card ${item.deadline_state === 'overdue' ? 'is-overdue' : ''}">
+        <div class="process-control-head">
+          <div><span class="muted small">${escapeHtml(item.category || 'Documento')} · creado ${fmtDate(item.created_at)} · ${item.started_at ? `iniciado ${fmtDate(item.started_at)}` : 'todavía no iniciado'}</span><h3>${escapeHtml(item.title || 'Sin título')}</h3><p class="muted small">Creado por ${escapeHtml(item.owner_name || item.owner_email || 'Sin identificar')}</p></div>
+          <div class="process-control-badges">${pill(item.status)}${processDeadlineLabel(item)}</div>
+        </div>
+        <div class="process-control-summary">
+          <span><b>${Number(item.approved || 0)}</b> aprobaciones realizadas</span>
+          <span><b>${Number(item.pending_approvers || 0)}</b> por aprobar</span>
+          <span><b>${Number(item.signed || 0)}</b> firmas realizadas</span>
+          <span><b>${Number(item.pending_signers || 0)}</b> por firmar</span>
+          <span><b>${Number(item.email_count || 0)}</b> correos enviados</span>
+        </div>
+        ${pending.length ? `<div class="process-pending-callout"><strong>Personas pendientes</strong><div>${pending.map(person => `<span class="pending-person ${person.is_current ? 'is-current' : person.is_blocking ? 'is-blocking' : ''}"><b>${escapeHtml(person.full_name || person.email || 'Sin nombre')}</b><small>${escapeHtml(participantActionLabel(person))}${person.is_current ? ' · turno activo' : person.is_blocking ? ' · bloquea este turno' : person.profile_status && person.profile_status !== 'active' ? '' : ' · esperando turno'}</small></span>`).join('')}</div></div>` : '<div class="process-complete-callout">No hay aprobaciones ni firmas pendientes.</div>'}
+        <details class="process-participant-detail"><summary>Ver responsables y actividad</summary>
+          <div class="table-wrap"><table><thead><tr><th>Persona</th><th>Responsabilidad</th><th>Estado</th><th>Acción</th><th>Correos</th><th>Último correo</th></tr></thead><tbody>
+          ${participants.map(person => `<tr><td><strong>${escapeHtml(person.full_name || 'Sin nombre')}</strong><br><span class="muted small">${escapeHtml(person.email || '')}</span>${person.profile_status && person.profile_status !== 'active' ? `<br><span class="pill danger">Cuenta ${escapeHtml(person.profile_status)}</span>` : ''}</td><td>${escapeHtml(participantRoleLabels[person.participant_role] || person.participant_role || '—')} · orden ${Number(person.sequence || 0)}</td><td>${pill(person.action_status || 'pending')}</td><td>${person.decision_source === 'deadline_no_objection' ? 'Sin objeción por vencimiento' : person.acted_at ? fmtDate(person.acted_at) : isClosedProcess && person.action_status === 'pending' ? 'Sin acción: proceso cerrado' : person.is_current ? '<b>Turno activo</b>' : person.is_blocking ? '<b>Cuenta no activa; bloquea este turno</b>' : person.profile_status && person.profile_status !== 'active' ? 'Cuenta no activa' : 'Esperando'}</td><td>${Number(person.email_count || 0)}</td><td>${person.last_email_at ? fmtDate(person.last_email_at) : '—'}</td></tr>`).join('')}
+          </tbody></table></div>
+        </details>
+        <div class="process-control-actions"><button class="secondary" type="button" data-open-document="${item.document_id}">Abrir expediente</button></div>
+      </article>`;
+    }).join('') : '<div class="empty">No hay procesos que coincidan con los filtros.</div>';
+    els['process-control-list'].innerHTML = loadError + resultNotice + cards;
   }
 
   async function processReviewDeadlinesOnce() {
@@ -1927,7 +2036,8 @@
     els['user-status-pill'].outerHTML = `<span id="user-status-pill" class="pill ${p.status === 'active' ? 'success' : 'warning'}">${escapeHtml(statusLabels[p.status] || p.status)}</span>`;
     els['user-status-pill'] = byId('user-status-pill');
     els['pending-banner'].classList.toggle('hidden', p.status === 'active');
-    els['admin-nav'].classList.toggle('hidden', !isAdmin());
+    els['admin-nav'].classList.toggle('hidden', !(isActive() && isAdmin()));
+    qsa('.superadmin-only').forEach(element => element.classList.toggle('hidden', !canUseSuperadminOversight()));
     qsa('[data-section="tasks"], [data-section="messages"], [data-section="notifications"]').forEach(btn => btn.disabled = !isActive());
     qsa('[data-section="new-document"]').forEach(btn => {
       btn.disabled = !canStartProcess();
@@ -2144,7 +2254,7 @@
 
   async function resendNotificationAllChannels(notificationId) {
     await run(async () => {
-      const { error } = await client.rpc('admin_resend_notification', {
+      const { error } = await client.rpc('superadmin_resend_notification', {
         p_notification_id: Number(notificationId),
         p_channels: ['email','push']
       });
@@ -2167,48 +2277,115 @@
     setTimeout(() => navigate(target), 200);
   }
 
-  async function loadEmailSystemStatus() {
-    if (!isAdmin()) { state.emailSystemStatus = null; state.emailDeliveries = []; return; }
-    const [statusResponse, deliveriesResponse] = await Promise.all([
-      client.rpc('get_email_system_status'),
-      client.rpc('list_recent_email_deliveries', { p_limit: 40 })
+  async function loadEmailSystemStatus(throwOnError = false) {
+    if (!canUseSuperadminOversight()) { state.emailSystemStatus = null; state.emailSystemError = null; state.emailDeliveries = []; state.superadminEmailControls = null; return; }
+    const [statusResponse, deliveriesResponse, controlsResponse] = await Promise.all([
+      client.rpc('superadmin_get_email_system_status'),
+      client.rpc('superadmin_list_email_log', { p_limit: 500 }),
+      client.rpc('superadmin_get_email_controls')
     ]);
+    const errors = [];
     if (statusResponse.error) {
       console.warn('No se pudo cargar el estado del correo.', statusResponse.error);
-      state.emailSystemStatus = null;
+      errors.push(statusResponse.error.message || 'No se pudo consultar el estado del correo');
     } else state.emailSystemStatus = statusResponse.data || null;
     if (deliveriesResponse.error) {
-      console.warn('No se pudo cargar el historial de correo.', deliveriesResponse.error);
-      state.emailDeliveries = [];
+      console.warn('No se pudo cargar el historial enriquecido de correo.', deliveriesResponse.error);
+      errors.push(deliveriesResponse.error.message || 'No se pudo consultar el historial de correo');
     } else state.emailDeliveries = deliveriesResponse.data || [];
+    if (controlsResponse.error) {
+      console.warn('No se pudo cargar la política de correos.', controlsResponse.error);
+      state.superadminEmailControls = null;
+      errors.push(controlsResponse.error.message || 'No se pudo consultar la política de correos');
+    } else state.superadminEmailControls = controlsResponse.data || null;
+    state.emailSystemError = errors.join(' · ') || null;
+    if (throwOnError && errors.length) throw new Error(state.emailSystemError);
+  }
+
+  function emailKindLabel(kind) {
+    return ({
+      document_signature: 'Solicitud de firma',
+      document_approval: 'Solicitud de aprobación',
+      task_reminder: 'Recordatorio',
+      deadline_warning: 'Próximo a vencer',
+      deadline_expired: 'Tarea vencida',
+      document_completed: 'Proceso completado',
+      test_delivery: 'Prueba de entrega'
+    })[kind] || String(kind || 'Correo automático').replaceAll('_', ' ');
+  }
+
+  function isDeadlineEmailKind(kind) {
+    return ['task_reminder','deadline_warning','deadline_expired'].includes(kind);
+  }
+
+  function emailLogMatches(row) {
+    const kindFilter = els['email-log-kind-filter']?.value || 'all';
+    const statusFilter = els['email-log-status-filter']?.value || 'all';
+    const search = String(els['email-log-search']?.value || '').trim().toLowerCase();
+    const kind = row.message_kind || row.notification_kind || '';
+    const matchesKind = kindFilter === 'all'
+      || (kindFilter === 'assignment' && !isDeadlineEmailKind(kind))
+      || kind === kindFilter;
+    if (!matchesKind || (statusFilter !== 'all' && row.status !== statusFilter)) return false;
+    if (!search) return true;
+    return [row.document_title, row.recipient_name, row.recipient_email, row.subject, kind]
+      .filter(Boolean).join(' ').toLowerCase().includes(search);
   }
 
   function renderEmailSystemStatus() {
-    if (!isAdmin() || !els['email-system-status']) return;
+    if (!canUseSuperadminOversight() || !els['email-system-status']) return;
     const item = state.emailSystemStatus;
-    if (!item) {
-      els['email-system-status'].innerHTML = '<div class="empty">Ejecuta la migración 07 y configura Gmail para ver el estado.</div>';
-      if (els['email-delivery-list']) els['email-delivery-list'].innerHTML = '';
-      return;
+    const controls = state.superadminEmailControls;
+    const controlForm = els['email-control-form'];
+    controlForm?.querySelectorAll('input, select, button').forEach(control => { control.disabled = !controls; });
+    if (controls) {
+      if (els['email-control-warning']) els['email-control-warning'].checked = Boolean(controls.send_deadline_warning);
+      if (els['email-control-reminder']) els['email-control-reminder'].checked = Boolean(controls.send_task_reminder);
+      if (els['email-control-expired']) els['email-control-expired'].checked = Boolean(controls.send_deadline_expired);
+      if (els['email-control-cooldown']) els['email-control-cooldown'].value = String(controls.reminder_cooldown_hours || 72);
     }
-    const cards = [
-      ['Correos', item.emails_enabled ? 'Activos' : 'Desactivados'],
+    const recent = state.emailDeliveries || [];
+    const stopped24h = Number(controls?.cancelled_24h || 0);
+    const cards = item ? [
+      ['Correos esenciales', item.emails_enabled ? 'Activos' : 'Desactivados'],
       ['Pendientes', Number(item.pending || 0)],
       ['Fallidos', Number(item.failed || 0)],
-      ['Enviados 24 h', Number(item.sent_24h || 0)]
-    ];
-    const warning = !item.emails_enabled
+      ['Enviados 24 h', Number(item.sent_24h || 0)],
+      ['Detenidos 24 h', stopped24h]
+    ] : [['Configuración', 'Ejecuta el SQL v8.7']];
+    const loadWarning = state.emailSystemError
+      ? `<div class="email-system-warning danger"><strong>No se pudo actualizar todo el control de correo.</strong><span>${escapeHtml(state.emailSystemError)} ${controls ? 'Se muestran los datos que sí pudieron cargarse.' : 'La política queda bloqueada hasta volver a cargarla correctamente.'}</span></div>`
+      : '';
+    const warning = item && !item.emails_enabled
       ? '<div class="email-system-warning"><strong>Correos desactivados.</strong><span>Activa el sistema antes de esperar notificaciones por correo.</span></div>'
-      : Number(item.failed || 0) > 0
+      : item && Number(item.failed || 0) > 0
         ? '<div class="email-system-warning danger"><strong>Hay correos fallidos.</strong><span>Revisa el detalle y usa Reintentar después de corregir la función o las credenciales.</span></div>'
-        : Number(item.pending || 0) > 0
+        : item && Number(item.pending || 0) > 0
           ? '<div class="email-system-warning"><strong>Hay correos pendientes.</strong><span>Si permanecen así más de dos minutos, revisa el Cron y la Edge Function del mailer.</span></div>'
           : '';
 
-    els['email-system-status'].innerHTML = warning + cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
+    els['email-system-status'].innerHTML = loadWarning + warning + cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
     if (!els['email-delivery-list']) return;
-    const rows = state.emailDeliveries || [];
-    els['email-delivery-list'].innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Destinatario</th><th>Asunto</th><th>Estado</th><th>Intentos</th><th>Detalle</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.recipient_email)}</td><td>${escapeHtml(row.subject)}</td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${row.last_error ? escapeHtml(friendlyErrorMessage(row.last_error, 'El proveedor de correo rechazó el envío. Revisa los registros de la Edge Function.')) : (row.provider_message_id ? `ID proveedor: ${escapeHtml(row.provider_message_id)}` : '—')}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td><div class="mini-actions">${row.status === 'failed' ? `<button class="secondary" data-retry-email="${row.id}">Reintentar correo</button>` : ''}${row.notification_id ? `<button class="secondary" data-resend-notification="${row.notification_id}">Reenviar aviso</button>` : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Todavía no hay correos en la cola.</div>';
+    const rows = recent.filter(emailLogMatches);
+    els['email-delivery-list'].innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Proceso</th><th>Destinatario</th><th>Tipo</th><th>Asunto</th><th>Estado</th><th>Intentos</th><th></th></tr></thead><tbody>${rows.map(row => {
+      const kind = row.message_kind || row.notification_kind || '';
+      const mayResend = row.notification_id && !isDeadlineEmailKind(kind);
+      return `<tr><td>${fmtDate(row.sent_at || row.policy_stopped_at || row.created_at)}</td><td>${row.document_title ? `<strong>${escapeHtml(row.document_title)}</strong>${row.document_status ? `<br><span class="muted small">${escapeHtml(statusLabels[row.document_status] || row.document_status)}</span>` : ''}` : '—'}</td><td>${row.recipient_name ? `<strong>${escapeHtml(row.recipient_name)}</strong><br>` : ''}<span class="muted small">${escapeHtml(row.recipient_email || '')}</span></td><td>${escapeHtml(emailKindLabel(kind))}</td><td>${escapeHtml(row.subject || '—')}</td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}${row.last_error ? `<br><span class="muted small">${escapeHtml(row.last_error)}</span>` : ''}</td><td><div class="mini-actions">${row.document_id ? `<button class="secondary compact" data-open-document="${row.document_id}">Abrir</button>` : ''}${row.status === 'failed' && !isDeadlineEmailKind(kind) ? `<button class="secondary compact" data-retry-email="${row.id}">Reintentar</button>` : ''}${mayResend ? `<button class="secondary compact" data-resend-notification="${row.notification_id}">Reenviar</button>` : ''}</div></td></tr>`;
+    }).join('')}</tbody></table></div>` : '<div class="empty">No hay correos que coincidan con los filtros.</div>';
+  }
+
+  async function updateSuperadminEmailControls(event) {
+    event?.preventDefault();
+    if (!canUseSuperadminOversight()) throw new Error('Esta configuración es exclusiva del superadministrador activo.');
+    if (!state.superadminEmailControls) throw new Error('Primero actualiza el panel para cargar la política vigente.');
+    const { error } = await client.rpc('superadmin_update_email_controls', {
+      p_send_task_reminder: Boolean(els['email-control-reminder']?.checked),
+      p_send_deadline_warning: Boolean(els['email-control-warning']?.checked),
+      p_send_deadline_expired: Boolean(els['email-control-expired']?.checked),
+      p_reminder_cooldown_hours: Number(els['email-control-cooldown']?.value || 72)
+    });
+    if (error) throw error;
+    await loadEmailSystemStatus(true).finally(() => renderEmailSystemStatus());
   }
 
   function renderAll() {
@@ -2222,7 +2399,8 @@
     renderNotifications();
     renderConversations();
     updateUnreadBadges();
-    if (isAdmin()) { renderAdminUsers(); renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderTemplateList(); }
+    if (isAdmin()) { renderAdminUsers(); renderPushSystemStatus(); renderTemplateList(); }
+    if (canUseSuperadminOversight()) { renderEmailSystemStatus(); renderAdminDashboard(); renderSuperadminProcessControl(); }
     renderAccessRecoveryRequests();
   }
 
@@ -2624,7 +2802,8 @@
 
   function navigate(section) {
     closeOpenDialogs({ keepSecurity: true });
-    if (!isActive() && ['new-document','tasks','documents','history','dashboard','messages','notifications'].includes(section)) section = 'profile';
+    if (!isActive() && ['new-document','tasks','documents','history','dashboard','messages','notifications','admin'].includes(section)) section = 'profile';
+    if (section === 'admin' && !(isActive() && isAdmin())) section = isActive() ? 'dashboard' : 'profile';
     if (section === 'new-document' && !canStartProcess()) section = 'dashboard';
     qsa('.page-section').forEach(s => s.classList.add('hidden'));
     byId(`section-${section}`).classList.remove('hidden');
@@ -2634,7 +2813,7 @@
       dashboard: ['Inicio', 'Lo que requiere tu atención'], documents: ['Mis documentos', 'Expedientes donde participas o que tú creaste'], history: ['Historial', 'Movimientos de tus expedientes'],
       'new-document': ['Crear documento', 'Asistente paso a paso'], tasks: ['Mis tareas', 'Solo se habilita la acción de tu turno'],
       messages: ['Mensajes', 'Conversaciones directas y grupos de trabajo'], notifications: ['Notificaciones', 'Avisos de tareas y documentos'],
-      profile: ['Perfil y firma', 'Identidad y firma registrada'], admin: ['Usuarios', 'Activa cuentas, asigna funciones y audita conversaciones']
+      profile: ['Perfil y firma', 'Identidad y firma registrada'], admin: ['Administración', canUseSuperadminOversight() ? 'Control global de procesos, correos, personas y permisos' : 'Activa cuentas y asigna funciones']
     };
     els['page-title'].textContent = titles[section][0];
     els['page-subtitle'].textContent = titles[section][1];
@@ -2644,7 +2823,7 @@
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
     if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
     if (section === 'history') renderDocumentHistory();
-    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadPushSystemStatus(), loadAdminDashboard(), loadTemplates(), loadAccessRecoveryRequests()]).then(() => { renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderTemplateList(); renderAccessRecoveryRequests(); }).catch(error => toast(error.message, true)); }
+    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadTemplates(), loadAccessRecoveryRequests()]).then(() => { renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderSuperadminProcessControl(); renderTemplateList(); renderAccessRecoveryRequests(); }).catch(error => toast(error.message, true)); }
     scrollActiveViewToTop({ focusHeading: true });
   }
 
@@ -4608,7 +4787,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadAccessRecoveryRequests()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadAccessRecoveryRequests()]);
     renderAll();
   }
 
@@ -5315,13 +5494,19 @@
       }, 'Notificaciones marcadas como leídas.');
     });
     els['refresh-users'].addEventListener('click', async () => { await run(async () => { await loadProfiles(); renderAdminUsers(); }, 'Lista actualizada.'); });
-    if (els['refresh-email-status']) els['refresh-email-status'].addEventListener('click', async () => { await run(async () => { await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Estado de correo actualizado.'); });
+    if (els['refresh-email-status']) els['refresh-email-status'].addEventListener('click', async () => { await run(() => loadEmailSystemStatus(true).finally(() => renderEmailSystemStatus()), 'Estado de correo actualizado.'); });
+    els['email-control-form']?.addEventListener('submit', event => run(() => updateSuperadminEmailControls(event), 'Política de correos actualizada.'));
+    ['email-log-kind-filter','email-log-status-filter'].forEach(id => els[id]?.addEventListener('change', renderEmailSystemStatus));
+    els['email-log-search']?.addEventListener('input', renderEmailSystemStatus);
     els['enable-push-notifications']?.addEventListener('click', activatePushNotifications);
     els['disable-push-notifications']?.addEventListener('click', disablePushNotifications);
     els['test-push-notification']?.addEventListener('click', sendTestPushNotification);
     els['refresh-notification-evidence']?.addEventListener('click', async () => { await run(async () => { await loadPushSystemStatus(); renderPushSystemStatus(); }, 'Evidencia actualizada.'); });
     els['process-push-now']?.addEventListener('click', async () => { await run(() => processPushQueueNow(false), 'Cola push procesada.'); });
     if (els['refresh-admin-dashboard']) els['refresh-admin-dashboard'].addEventListener('click', async () => { await run(async () => { await loadAdminDashboard(); renderAdminDashboard(); }, 'Indicadores actualizados.'); });
+    if (els['refresh-process-control']) els['refresh-process-control'].addEventListener('click', async () => { await run(() => loadSuperadminProcessControl(true).finally(() => renderSuperadminProcessControl()), 'Control de procesos actualizado.'); });
+    els['process-control-filter']?.addEventListener('change', renderSuperadminProcessControl);
+    els['process-control-search']?.addEventListener('input', renderSuperadminProcessControl);
     if (els['refresh-templates']) els['refresh-templates'].addEventListener('click', async () => { await run(async () => { await loadTemplates(); renderTemplateList(); }, 'Plantillas actualizadas.'); });
 
     document.addEventListener('submit', async event => {
@@ -5371,7 +5556,7 @@
       const go = e.target.closest('[data-go-section]'); if (go) return navigate(go.dataset.goSection);
       const open = e.target.closest('[data-open-document]'); if (open) return openDocument(open.dataset.openDocument);
       const documentChat = e.target.closest('[data-document-chat]'); if (documentChat) return openDocumentConversation(documentChat.dataset.documentChat);
-      const retryEmail = e.target.closest('[data-retry-email]'); if (retryEmail) { await run(async () => { const { error } = await client.rpc('admin_retry_email', { p_outbox_id: Number(retryEmail.dataset.retryEmail) }); if (error) throw error; await loadEmailSystemStatus(); renderEmailSystemStatus(); }, 'Correo colocado nuevamente en la cola.'); return; }
+      const retryEmail = e.target.closest('[data-retry-email]'); if (retryEmail) { await run(async () => { const { error } = await client.rpc('superadmin_retry_email', { p_outbox_id: Number(retryEmail.dataset.retryEmail) }); if (error) throw error; await loadEmailSystemStatus(true).finally(() => renderEmailSystemStatus()); }, 'Correo colocado nuevamente en la cola.'); return; }
       const resendNotification = e.target.closest('[data-resend-notification]'); if (resendNotification) return resendNotificationAllChannels(resendNotification.dataset.resendNotification);
       const preview = e.target.closest('[data-preview-document]'); if (preview) return openDocumentPreview(preview.dataset.previewDocument);
       const dl = e.target.closest('[data-download-path]'); if (dl) return downloadPrivate(dl.dataset.downloadPath, dl.dataset.downloadName, currentDocumentContextId(dl.dataset.downloadPath));
