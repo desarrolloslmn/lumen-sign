@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.9.0-seguridad-seguimiento';
+  const APP_VERSION = '8.9.1-permisos-administrador';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -127,12 +127,14 @@
     const input = byId(id);
     if (input) input.value = String(value);
   }
-  const isAdmin = () => ['superadmin', 'admin'].includes(state.profile?.role);
   const isSuperAdmin = () => state.profile?.role === 'superadmin';
+  // Los controles globales pertenecen exclusivamente al superadministrador.
+  // El rol "admin" conserva la creación y gestión de sus propios procesos.
+  const isAdmin = () => isSuperAdmin();
   const isContracts = () => state.profile?.role === 'contracts';
   const isActive = () => state.profile?.status === 'active';
   const canUseSuperadminOversight = () => isActive() && isSuperAdmin();
-  const canStartProcess = () => isActive() && (isAdmin() || isContracts());
+  const canStartProcess = () => isActive() && ['superadmin', 'admin', 'contracts'].includes(state.profile?.role);
 
   const roleLabels = {
     superadmin: 'Superadministrador', admin: 'Administrador', contracts: 'Contratos',
@@ -3656,6 +3658,10 @@
   }
 
   function renderAdminUsers() {
+    if (!isSuperAdmin()) {
+      els['admin-users-table'].innerHTML = '';
+      return;
+    }
     const canSetAdmin = state.profile.role === 'superadmin';
     const roles = ['user','approver','signer','contracts','auditor', ...(canSetAdmin ? ['admin','superadmin'] : [])];
     els['admin-users-table'].innerHTML = `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Departamento</th><th>Rol</th><th>Estado</th><th></th></tr></thead><tbody>
@@ -5709,6 +5715,10 @@
 
 
   async function updateAdminUser(id) {
+    if (!isSuperAdmin()) {
+      toast('Solo el superadministrador puede modificar usuarios y permisos.', true);
+      return;
+    }
     const role = document.querySelector(`[data-admin-role="${id}"]`).value;
     const status = document.querySelector(`[data-admin-status="${id}"]`).value;
     await run(async () => {
