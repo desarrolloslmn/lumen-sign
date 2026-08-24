@@ -4,7 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="theme-color" content="#17365f" />
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <title>Lumen Sign</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -46,6 +51,8 @@
           <span class="hint">Mantén presionado el ojo para mostrarla.</span>
         </label>
         <button class="primary large" type="submit">Ingresar</button>
+        <div id="login-connectivity-status" class="login-connectivity-status hidden" role="alert" aria-live="assertive"></div>
+        <button id="login-connectivity-copy" class="secondary hidden" type="button">Copiar diagnóstico para TI</button>
         <button id="forgot-password" class="link-button" type="button">Olvidé mi contraseña</button>
       </form>
 
@@ -140,6 +147,14 @@
       <div id="pending-banner" class="banner warning hidden">
         <strong>Tu cuenta está confirmada, pero aún no tiene permisos.</strong>
         <span>Completa tu perfil mientras un administrador activa tu cuenta.</span>
+      </div>
+
+      <div id="push-compliance-banner" class="push-compliance-banner hidden" role="status" aria-live="polite">
+        <div>
+          <strong id="push-compliance-banner-title">Notificaciones pendientes</strong>
+          <span id="push-compliance-banner-copy">Este dispositivo todavía no está listo para recibir avisos.</span>
+        </div>
+        <button id="push-compliance-banner-action" class="secondary" type="button">Resolver ahora</button>
       </div>
 
       <section id="section-dashboard" class="page-section">
@@ -666,7 +681,7 @@
 
   <dialog id="sign-confirm-dialog" class="dialog sign-confirm-dialog">
     <form method="dialog"><button class="dialog-close" aria-label="Cerrar">×</button></form>
-    <div class="dialog-heading"><p class="eyebrow dark">Confirmación de identidad</p><h2>Autoriza tu firma electrónica</h2><p class="muted">Vuelve a escribir tu contraseña y acepta el consentimiento antes de finalizar.</p></div>
+    <div class="dialog-heading"><p class="eyebrow dark">Confirmación de identidad</p><h2>Autoriza tu firma electrónica</h2><p class="muted">La firma visual expresa tu decisión; la contraseña y el código del autenticador confirman que realmente eres tú.</p></div>
     <form id="sign-confirm-form" class="stack">
       <label>Contraseña actual<div class="password-field"><input id="sign-confirm-password" type="password" autocomplete="current-password" required /><button id="sign-confirm-password-toggle" class="password-hold" type="button" aria-label="Mantener presionado para mostrar contraseña">◉</button></div></label>
       <label class="consent-box"><input id="sign-consent" type="checkbox" required /><span>Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.</span></label>
@@ -697,6 +712,42 @@
       </fieldset>
       <button class="primary" type="submit">Crear conversación</button>
     </form>
+  </dialog>
+
+  <dialog id="session-timeout-dialog" class="dialog session-timeout-dialog" aria-labelledby="session-timeout-title">
+    <section class="session-timeout-shell">
+      <div class="session-timeout-icon" aria-hidden="true">⏱</div>
+      <div>
+        <p class="eyebrow dark">Protección por inactividad</p>
+        <h2 id="session-timeout-title">Tu sesión está por cerrarse</h2>
+        <p class="muted">Para reducir el riesgo de dejar documentos abiertos, Lumen Sign cerrará automáticamente la sesión si no confirmas que sigues trabajando.</p>
+      </div>
+      <div class="session-timeout-clock"><span>Tiempo restante</span><strong id="session-timeout-countdown">5:00</strong></div>
+      <div class="button-row wrap">
+        <button id="session-timeout-continue" class="primary large" type="button" data-keep-enabled="true">Continuar sesión</button>
+        <button id="session-timeout-logout" class="secondary large" type="button" data-keep-enabled="true">Cerrar sesión ahora</button>
+      </div>
+    </section>
+  </dialog>
+
+  <dialog id="push-onboarding-dialog" class="dialog push-onboarding-dialog" aria-labelledby="push-onboarding-title">
+    <section class="push-onboarding-shell">
+      <div class="push-onboarding-icon" aria-hidden="true">🔔</div>
+      <div>
+        <p class="eyebrow dark">Avisos obligatorios</p>
+        <h2 id="push-onboarding-title">Activa las notificaciones de Lumen Sign</h2>
+        <p id="push-onboarding-copy" class="muted">Así verás tus solicitudes de aprobación, firma y vencimientos aunque no tengas abierta la plataforma.</p>
+      </div>
+      <div id="push-onboarding-status" class="push-onboarding-status" role="status" aria-live="polite"></div>
+      <ol id="push-onboarding-steps" class="push-onboarding-steps"></ol>
+      <p class="push-onboarding-privacy">Los avisos son genéricos: no incluyen documentos ni información confidencial.</p>
+      <div class="button-row wrap push-onboarding-actions">
+        <button id="push-onboarding-activate" class="primary large" type="button">Activar notificaciones</button>
+        <button id="push-onboarding-check" class="secondary large hidden" type="button">Ya lo corregí, comprobar</button>
+        <button id="push-onboarding-admin-bypass" class="secondary large hidden" type="button">Entrar para administrar</button>
+        <button id="push-onboarding-logout" class="ghost large" type="button">Cerrar sesión</button>
+      </div>
+    </section>
   </dialog>
 
   <select id="field-type" class="hidden"><option value="signature">Firma</option></select><input id="field-required" type="checkbox" class="hidden" checked><select id="selected-field-type" class="hidden"><option value="signature">Firma</option></select><input id="selected-field-required" type="checkbox" class="hidden" checked>

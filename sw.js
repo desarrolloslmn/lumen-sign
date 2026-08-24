@@ -1,4 +1,4 @@
-/* Lumen Sign v8.6.0 — Service Worker de notificaciones push */
+/* Lumen Sign v8.9.0 — Service Worker de notificaciones y seguimiento */
 
 self.addEventListener('install', event => {
   self.skipWaiting();
@@ -22,11 +22,12 @@ self.addEventListener('push', event => {
     tag: payload.notificationId ? `lumen-sign-${payload.notificationId}` : 'lumen-sign',
     renotify: true,
     requireInteraction: true,
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
     data: {
       url: payload.url || './?open=tasks',
       notificationId: payload.notificationId || null
-    },
-    badge: './favicon.ico'
+    }
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -35,12 +36,16 @@ self.addEventListener('push', event => {
 self.addEventListener('notificationclick', event => {
   event.notification.close();
 
-  const targetUrl = new URL(event.notification.data?.url || './?open=tasks', self.registration.scope).href;
+  const scopeUrl = new URL(self.registration.scope);
+  const requestedUrl = new URL(event.notification.data?.url || './?open=tasks', scopeUrl);
+  const targetUrl = requestedUrl.origin === scopeUrl.origin && requestedUrl.href.startsWith(scopeUrl.href)
+    ? requestedUrl.href
+    : new URL('./?open=tasks', scopeUrl).href;
 
   event.waitUntil((async () => {
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const client of windows) {
-      if (client.url.includes('/lumen-sign/')) {
+    const controlledWindows = await self.clients.matchAll({ type: 'window', includeUncontrolled: false });
+    for (const client of controlledWindows) {
+      if (client.url.startsWith(self.registration.scope)) {
         await client.focus();
         try {
           client.postMessage({ type: 'LUMEN_SIGN_PUSH_CLICK', url: targetUrl });
@@ -48,6 +53,28 @@ self.addEventListener('notificationclick', event => {
         return;
       }
     }
+
+    // Si la pagina ya existia pero todavia no estaba controlada, navegarla deja
+    // la intencion en la URL para que app.js la procese al terminar de cargar.
+    const allWindows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of allWindows) {
+      if (client.url.startsWith(self.registration.scope)) {
+        try { await client.navigate(targetUrl); } catch {}
+        await client.focus();
+        return;
+      }
+    }
     await self.clients.openWindow(targetUrl);
+  })());
+});
+
+self.addEventListener('pushsubscriptionchange', event => {
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    windows.forEach(client => {
+      try {
+        client.postMessage({ type: 'LUMEN_SIGN_PUSH_SUBSCRIPTION_CHANGED' });
+      } catch {}
+    });
   })());
 });

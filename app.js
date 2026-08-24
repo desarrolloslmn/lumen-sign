@@ -18,13 +18,25 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.7.0-supervision-superadmin';
+  const APP_VERSION = '8.9.0-seguridad-seguimiento';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const PUSH_FUNCTION = 'send-push';
   const PUSH_VAPID_PUBLIC_KEY = cfg.pushVapidPublicKey || 'BC9n68QB-ZFiUFqnbK52EHE_JJb213MmlF0t8GN3zKTs5m_uCQTxvQVmOvjj9ePSyeDBgAgeGqXdS0AQaZHsbVk';
+  const boundedInteger = (value, fallback, minimum, maximum) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed)
+      ? Math.max(minimum, Math.min(maximum, Math.round(parsed)))
+      : fallback;
+  };
+  const SESSION_IDLE_MINUTES = boundedInteger(cfg.sessionIdleMinutes, 30, 15, 120);
+  const SESSION_WARNING_MINUTES = boundedInteger(cfg.sessionWarningMinutes, 5, 1, 10);
+  const SESSION_IDLE_MS = SESSION_IDLE_MINUTES * 60 * 1000;
+  const SESSION_WARNING_MS = Math.min(SESSION_WARNING_MINUTES * 60 * 1000, SESSION_IDLE_MS - 60 * 1000);
+  const SESSION_SIGNOUT_TIMEOUT_MS = 3000;
+  const PUSH_OPEN_INTENT_KEY = 'lumen-sign:push-open-intent';
   const CONSENT_VERSION = 'LS-2026-06';
   const CONSENT_TEXT = 'Declaro que revisé el documento y acepto firmarlo electrónicamente. Comprendo que mi firma, la fecha, el documento y su hash quedarán registrados como evidencia.';
   const PRIVACY_NOTICE_VERSION = 'LUMEN-PRIVACIDAD-2026-01';
@@ -43,7 +55,7 @@
     activeDocumentId: null,
     flowDocumentId: null,
     signatureDrawing: false,
-    profileDirty: false, loadedUserId: null, sessionLoadPromise: null,
+    profileDirty: false, loadedUserId: null, sessionLoadPromise: null, sessionGeneration: 0,
     prepare: null, signing: null, preview: null,
     workflowCandidates: [], wizardStep: 1,
     notifications: [], conversations: [], activeConversationId: null, activeConversationMembers: [],
@@ -51,7 +63,13 @@
     liveSyncTimer: null, reminderTimer: null, liveRefreshTimer: null, realtimeConnected: false,
     passwordResetEmail: '', passwordResetActive: false,
     emailSystemStatus: null, emailSystemError: null, emailDeliveries: [], superadminProcesses: [], superadminProcessError: null, superadminEmailControls: null,
-    pushSubscriptions: [], pushSystemStatus: null, pushDeliveries: [], pushIntentHandled: false, templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
+    pushSubscriptions: [], pushSystemStatus: null, pushDeliveries: [], pushIntentHandled: false,
+    pushCompliance: null, pushComplianceAvailable: false, pushComplianceGateActive: false,
+    pushAdminBypass: false, pushDeviceState: null, pushPolicy: null, pushCoverage: [],
+    pushCoverageError: null, pushLastComplianceSyncAt: 0,
+    userCompliance: [], userComplianceError: null,
+    idleTimer: null, idleWarningActive: false, idleSigningOut: false, idleLastWriteAt: 0,
+    templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
   };
 
   const els = {};
@@ -130,7 +148,7 @@
 
   function cacheElements() {
     [
-      'auth-view','app-view','login-form','register-form','forgot-password','logout-button','admin-nav',
+      'auth-view','app-view','login-form','register-form','forgot-password','logout-button','admin-nav','login-connectivity-status',
       'reset-panel','reset-request-form','reset-confirm-form','reset-email','reset-sent-note','reset-panel-description','reset-password','reset-password-confirm','reset-back-login','reset-password-toggle','reset-password-confirm-toggle',
       'login-password-toggle','register-password-toggle','sidebar-user','user-status-pill','pending-banner',
       'next-action-card','stats-grid','recent-documents','documents-table','document-search','document-status-filter','history-search','history-action-filter','history-summary','history-table',
@@ -150,11 +168,17 @@
       'doc-due-days','doc-first-reminder-hours','doc-repeat-reminder-hours','refresh-email-status','email-system-status','email-delivery-list','email-admin-panel',
       'email-control-form','email-control-warning','email-control-reminder','email-control-expired','email-control-cooldown','email-log-kind-filter','email-log-status-filter','email-log-search',
       'push-profile-panel','push-device-status','enable-push-notifications','test-push-notification','disable-push-notifications',
+      'push-compliance-banner','push-compliance-banner-title','push-compliance-banner-copy','push-compliance-banner-action',
+      'push-onboarding-dialog','push-onboarding-title','push-onboarding-copy','push-onboarding-status','push-onboarding-steps','push-onboarding-activate','push-onboarding-check','push-onboarding-admin-bypass','push-onboarding-logout',
       'notification-evidence-admin-panel','push-system-status','notification-delivery-list','refresh-notification-evidence','process-push-now',
+      'push-policy-form','push-policy-enforcement','push-policy-warning','push-policy-reminder','push-policy-expired','push-policy-stale-days',
+      'push-coverage-filter','push-coverage-search','push-coverage-summary','push-coverage-list','refresh-push-coverage',
+      'user-compliance-panel','user-compliance-filter','user-compliance-search','user-compliance-summary','user-compliance-list','refresh-user-compliance','download-user-compliance',
       'document-template','approval-routing','signature-routing','save-template-button','template-dialog','template-form','template-name','template-description','template-list','refresh-templates',
       'admin-dashboard','refresh-admin-dashboard','admin-operations-panel','superadmin-process-panel','refresh-process-control','process-control-metrics','process-control-filter','process-control-search','process-control-list','flow-approval-routing','flow-signature-routing','sign-confirm-dialog','sign-confirm-form','sign-confirm-password','sign-confirm-password-toggle','sign-confirm-mfa-code','sign-confirm-error','sign-confirm-security-note','sign-privacy-consent','sign-consent',
       'force-password-dialog','force-password-form','force-current-password','force-new-password','force-confirm-password','force-current-password-toggle','force-new-password-toggle','force-confirm-password-toggle','force-password-logout',
-      'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-mobile-copy-secret','mfa-mobile-secret-copy','mfa-mobile-use-qr','mfa-mobile-use-manual','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry'
+      'mfa-setup-dialog','mfa-setup-form','mfa-qr','mfa-secret','mfa-setup-code','mfa-setup-error','mfa-setup-logout','mfa-mobile-copy-secret','mfa-mobile-secret-copy','mfa-mobile-use-qr','mfa-mobile-use-manual','mfa-verify-dialog','mfa-verify-form','mfa-verify-code','mfa-verify-error','mfa-verify-logout','mfa-verify-retry',
+      'session-timeout-dialog','session-timeout-countdown','session-timeout-continue','session-timeout-logout','login-connectivity-copy'
     ].forEach(id => els[id] = byId(id));
     byId('max-file-label').textContent = String(MAX_FILE_MB);
 
@@ -174,35 +198,59 @@
     ensureAccessRecoveryUi();
     ensureAdminRecoveryUi();
     ensurePushNotificationUi();
+    ensureUserComplianceUi();
     ensurePrivateAccessMeta();
     ensurePrivateLoginNotice();
     ensureMfaMobileSetupUi();
+  }
+
+  function errorText(error) {
+    return String(error?.message || error || '').trim().toLowerCase();
+  }
+
+  function isInvalidCredentialsError(error) {
+    const text = errorText(error);
+    return error?.code === 'invalid_credentials' || text.includes('invalid login credentials');
+  }
+
+  function isServiceUnavailableError(error) {
+    const status = Number(error?.status || 0);
+    return status >= 500 && status <= 599;
+  }
+
+  function isConnectivityError(error) {
+    if (!navigator.onLine) return true;
+    const status = Number(error?.status || 0);
+    if (status > 0) return false;
+    const text = errorText(error);
+    const name = String(error?.name || '').toLowerCase();
+    return name.includes('authretryablefetcherror')
+      || text.includes('networkerror')
+      || text.includes('failed to fetch')
+      || text.includes('fetch resource')
+      || text.includes('load failed')
+      || text.includes('connection reset')
+      || text.includes('timed out');
   }
 
   function friendlyErrorMessage(error, fallback = 'No fue posible completar la operación. Intenta nuevamente.') {
     const raw = String(error?.message || error || '').trim();
     const text = raw.toLowerCase();
 
-    if (
-      !navigator.onLine
-      || text.includes('networkerror')
-      || text.includes('failed to fetch')
-      || text.includes('fetch resource')
-      || text.includes('load failed')
-      || text.includes('authretryablefetcherror')
-      || text.includes('connection reset')
-    ) {
-      return 'No se pudo conectar con Lumen Sign. Revisa tu conexión o intenta desde otra red. Si estás en una red corporativa, solicita que permitan el acceso a Supabase.';
-    }
-
-    if (text.includes('invalid login credentials')) {
+    if (isInvalidCredentialsError(error)) {
       return 'El correo o la contraseña no son correctos.';
+    }
+    if (text.includes('too many requests') || text.includes('rate limit') || Number(error?.status || 0) === 429) {
+      return 'Se realizaron demasiados intentos. Espera unos minutos antes de volver a intentar.';
+    }
+    if (isServiceUnavailableError(error)) {
+      return 'El servicio de acceso está temporalmente no disponible. Tu contraseña no fue rechazada; intenta nuevamente en unos minutos.';
+    }
+    if (isConnectivityError(error)) {
+      return 'No se pudo conectar con Lumen Sign. Tu contraseña no fue rechazada. Revisa tu conexión o intenta desde otra red.';
     }
     if (text.includes('email not confirmed')) {
       return 'La cuenta todavía no está confirmada. Contacta al superadministrador.';
-    }
-    if (text.includes('too many requests') || text.includes('rate limit')) {
-      return 'Se realizaron demasiados intentos. Espera unos minutos antes de volver a intentar.';
     }
     if (text.includes('jwt expired') || text.includes('invalid jwt') || text.includes('session expired')) {
       return 'Tu sesión venció. Cierra sesión e ingresa nuevamente.';
@@ -234,6 +282,65 @@
 
     const looksSpanish = /\b(no|la|el|los|las|una|un|tu|tus|para|debes|debe|código|contraseña|documento|solicitud|permiso|sesión|acceso|correo|firma|usuario|proceso|expediente)\b/i.test(raw);
     return looksSpanish ? raw : fallback;
+  }
+
+  function clearLoginConnectivityStatus() {
+    if (!els['login-connectivity-status']) return;
+    els['login-connectivity-status'].textContent = '';
+    els['login-connectivity-status'].classList.add('hidden');
+    els['login-connectivity-copy']?.classList.add('hidden');
+  }
+
+  function showLoginConnectivityStatus(code, message) {
+    const panel = els['login-connectivity-status'];
+    if (!panel) return;
+    panel.textContent = `${code} · ${message}`;
+    panel.classList.remove('hidden');
+    els['login-connectivity-copy']?.classList.remove('hidden');
+  }
+
+  async function probeSupabaseReachability(timeoutMs = 5000) {
+    if (!navigator.onLine) return false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      await fetch(`${String(cfg.supabaseUrl).replace(/\/$/, '')}/auth/v1/health`, {
+        method: 'GET', mode: 'no-cors', credentials: 'omit', cache: 'no-store', signal: controller.signal
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function showLoginConnectivityDiagnosis() {
+    if (!navigator.onLine) {
+      showLoginConnectivityStatus('LS-NET-01', 'Este equipo aparece sin Internet. Lumen Sign no comprobó tu contraseña. Conéctate y vuelve a intentar.');
+      return;
+    }
+    const reachable = await probeSupabaseReachability();
+    if (!reachable) {
+      showLoginConnectivityStatus('LS-NET-02', `No pudimos llegar al servicio de acceso. Tu contraseña no fue rechazada. Prueba otra red o datos móviles; si ahí funciona, pide a TI permitir HTTPS a ${new URL(cfg.supabaseUrl).hostname}.`);
+      return;
+    }
+    showLoginConnectivityStatus('LS-NET-03', `El servicio responde, pero esta red o navegador bloqueó la solicitud de acceso. Tu contraseña no fue rechazada. Pide a TI permitir OPTIONS y POST a ${new URL(cfg.supabaseUrl).hostname}/auth/v1/.`);
+  }
+
+  async function copyLoginConnectivityDiagnosis() {
+    const visible = els['login-connectivity-status']?.textContent?.trim() || 'Sin código disponible';
+    const host = new URL(cfg.supabaseUrl).hostname;
+    const text = [
+      'Diagnóstico de red de Lumen Sign',
+      visible,
+      `Fecha: ${new Date().toLocaleString('es-MX')}`,
+      `Navegador: ${navigator.userAgent}`,
+      `Permitir HTTPS/WSS 443 a: desarrolloslmn.github.io, cdn.jsdelivr.net y ${host}`,
+      'Supabase: /auth/v1/*, /rest/v1/*, /storage/v1/*, /functions/v1/* y /realtime/v1/*',
+      'Métodos: OPTIONS, GET, POST, PATCH, PUT y DELETE.'
+    ].join('\n');
+    await copyTextToClipboard(text, 'Diagnóstico copiado para enviarlo a TI.');
   }
 
   function restoreToastHost() {
@@ -384,7 +491,7 @@
           <div>
             <p class="eyebrow dark">Notificaciones</p>
             <h2>Alertas en este dispositivo</h2>
-            <p class="muted small">Activa avisos del navegador para recibir tareas de firma, aprobación y vencimientos aunque no estés viendo la plataforma.</p>
+            <p class="muted small">Cada teléfono, computadora y navegador debe quedar registrado para recibir tareas de firma, aprobación y vencimientos aunque no estés viendo la plataforma.</p>
           </div>
         </div>
         <div id="push-device-status" class="push-status-box">
@@ -404,21 +511,47 @@
     if (adminSection && !byId('notification-evidence-admin-panel')) {
       const panel = document.createElement('section');
       panel.id = 'notification-evidence-admin-panel';
-      panel.className = 'panel notification-evidence-admin-panel';
+      panel.className = 'panel notification-evidence-admin-panel superadmin-only hidden';
       panel.innerHTML = `
         <div class="panel-header wrap">
           <div>
-            <p class="eyebrow dark">Multicanal</p>
-            <h2>Evidencia y reenvío de avisos</h2>
-            <p class="muted small">El correo se mantiene activo. Este panel agrega push al dispositivo y reenvío manual por todos los canales.</p>
+            <p class="eyebrow dark">Control exclusivo del superadministrador</p>
+            <h2>Notificaciones por dispositivo</h2>
+            <p class="muted small">El correo se mantiene activo. Aquí ves quién sí puede recibir alertas flotantes y quién todavía no activó su teléfono o computadora.</p>
           </div>
           <div class="button-row">
             <button id="process-push-now" class="secondary" type="button">Procesar push ahora</button>
             <button id="refresh-notification-evidence" class="secondary" type="button">Actualizar</button>
           </div>
         </div>
+        <form id="push-policy-form" class="push-policy-form">
+          <label class="email-control-option"><input id="push-policy-enforcement" type="checkbox" /><span><strong>Exigir activación al ingresar</strong><small>El usuario debe activar este dispositivo o contar con una excepción técnica temporal.</small></span></label>
+          <label class="email-control-option"><input id="push-policy-warning" type="checkbox" /><span><strong>Aviso próximo a vencer</strong><small>Alerta preventiva; se mantiene activa por defecto.</small></span></label>
+          <label class="email-control-option"><input id="push-policy-reminder" type="checkbox" /><span><strong>Recordatorio repetitivo</strong><small>Permanece apagado para no saturar a las personas.</small></span></label>
+          <label class="email-control-option"><input id="push-policy-expired" type="checkbox" /><span><strong>Aviso después del vencimiento</strong><small>Permanece apagado para evitar repeticiones diarias.</small></span></label>
+          <label>Considerar inactivo después de
+            <select id="push-policy-stale-days"><option value="30">30 días</option><option value="45">45 días</option><option value="60">60 días</option><option value="90">90 días</option></select>
+          </label>
+          <button class="primary" type="submit">Guardar política Push</button>
+        </form>
         <div id="push-system-status" class="email-status-grid"></div>
-        <div id="notification-delivery-list"><div class="empty">Ejecuta la migración 30 para ver evidencia multicanal.</div></div>`;
+        <section class="push-coverage-section">
+          <div class="panel-header wrap">
+            <div><h3>Cobertura por persona</h3><p class="muted small">Muestra permisos, dispositivos, última actividad, entregas y excepciones.</p></div>
+            <button id="refresh-push-coverage" class="secondary" type="button">Actualizar personas</button>
+          </div>
+          <div class="push-coverage-toolbar">
+            <select id="push-coverage-filter">
+              <option value="all">Todas las personas</option><option value="missing">Sin activar</option><option value="denied">Permiso rechazado</option><option value="installation_required">Falta instalar en iPhone</option><option value="error">Con error</option><option value="unsupported">No compatible</option><option value="stale">Sin actividad reciente</option><option value="exempt">Con excepción</option><option value="active">Activas</option>
+            </select>
+            <input id="push-coverage-search" type="search" placeholder="Buscar nombre, correo o área" />
+          </div>
+          <div id="push-coverage-summary" class="push-coverage-summary"></div>
+          <div id="push-coverage-list"><div class="empty">Ejecuta el SQL 33 de este paquete para consultar la cobertura.</div></div>
+        </section>
+        <section class="push-delivery-section"><h3>Entregas Push recientes</h3>
+          <div id="notification-delivery-list"><div class="empty">Ejecuta la migración 30 para ver evidencia multicanal.</div></div>
+        </section>`;
 
       const emailPanel = adminSection.querySelector('#email-system-status')?.closest('.panel');
       if (emailPanel) emailPanel.insertAdjacentElement('afterend', panel);
@@ -427,7 +560,52 @@
 
     [
       'push-profile-panel','push-device-status','enable-push-notifications','test-push-notification','disable-push-notifications',
-      'notification-evidence-admin-panel','push-system-status','notification-delivery-list','refresh-notification-evidence','process-push-now'
+      'notification-evidence-admin-panel','push-system-status','notification-delivery-list','refresh-notification-evidence','process-push-now',
+      'push-policy-form','push-policy-enforcement','push-policy-warning','push-policy-reminder','push-policy-expired','push-policy-stale-days',
+      'push-coverage-filter','push-coverage-search','push-coverage-summary','push-coverage-list','refresh-push-coverage'
+    ].forEach(id => els[id] = byId(id));
+  }
+
+  function ensureUserComplianceUi() {
+    const adminSection = byId('section-admin');
+    if (!adminSection || byId('user-compliance-panel')) return;
+
+    const panel = document.createElement('section');
+    panel.id = 'user-compliance-panel';
+    panel.className = 'panel user-compliance-panel superadmin-only hidden';
+    panel.innerHTML = `
+      <div class="panel-header wrap">
+        <div>
+          <p class="eyebrow dark">Control exclusivo del superadministrador</p>
+          <h2>Cumplimiento por persona</h2>
+          <p class="muted small">Concentra pendientes de aprobación y firma, turno activo, vencimientos y las 50 acciones históricas más recientes por persona.</p>
+        </div>
+        <div class="button-row wrap">
+          <button id="download-user-compliance" class="secondary" type="button">Descargar reporte CSV</button>
+          <button id="refresh-user-compliance" class="secondary" type="button">Actualizar</button>
+        </div>
+      </div>
+      <div class="user-compliance-toolbar">
+        <select id="user-compliance-filter">
+          <option value="all">Todas las personas</option>
+          <option value="attention">Requieren atención</option>
+          <option value="overdue">Turnos vencidos</option>
+          <option value="blocking">Con turno activo</option>
+          <option value="pending">Con pendientes</option>
+          <option value="completed">Sin pendientes</option>
+        </select>
+        <input id="user-compliance-search" type="search" placeholder="Buscar nombre, correo o área" />
+      </div>
+      <div id="user-compliance-summary" class="user-compliance-summary"></div>
+      <div id="user-compliance-list"><div class="empty">Ejecuta el SQL 34 para consultar cumplimiento por persona.</div></div>`;
+
+    const processPanel = byId('superadmin-process-panel');
+    if (processPanel) processPanel.insertAdjacentElement('afterend', panel);
+    else adminSection.appendChild(panel);
+
+    [
+      'user-compliance-panel','user-compliance-filter','user-compliance-search','user-compliance-summary',
+      'user-compliance-list','refresh-user-compliance','download-user-compliance'
     ].forEach(id => els[id] = byId(id));
   }
 
@@ -953,7 +1131,7 @@
       note = document.createElement('div');
       note.id = 'sign-confirm-security-note';
       note.className = 'security-note sign-security-note';
-      note.innerHTML = '<strong>Firma reforzada:</strong> se validará contraseña, código MFA, aviso de privacidad y consentimiento antes de registrar la firma.';
+      note.innerHTML = '<strong>Dos evidencias distintas:</strong> tu firma visual registra la decisión; la contraseña y el código MFA confirman tu identidad. El cierre automático por inactividad reduce el riesgo de dejar la cuenta abierta.';
       if (consent) consent.insertAdjacentElement('beforebegin', note);
       else form.insertBefore(note, submit || null);
     }
@@ -1194,10 +1372,164 @@
     document.body.style.cursor = busy ? 'progress' : '';
   }
 
+  const IDLE_ACTIVITY_STORAGE_KEY = 'lumen-sign:last-active-at';
+
+  function readIdleActivity() {
+    try {
+      const value = Number(localStorage.getItem(IDLE_ACTIVITY_STORAGE_KEY) || 0);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    } catch {
+      return state.idleLastWriteAt || 0;
+    }
+  }
+
+  function writeIdleActivity(value = Date.now()) {
+    state.idleLastWriteAt = value;
+    try { localStorage.setItem(IDLE_ACTIVITY_STORAGE_KEY, String(value)); }
+    catch {}
+  }
+
+  function recordSessionActivity(force = false) {
+    if (!state.session || state.idleWarningActive || state.idleSigningOut) return;
+    const now = Date.now();
+    if (!force && now - state.idleLastWriteAt < 15 * 1000) return;
+    writeIdleActivity(now);
+  }
+
+  function closeSessionTimeoutWarning() {
+    state.idleWarningActive = false;
+    if (els['session-timeout-dialog']?.open) els['session-timeout-dialog'].close();
+  }
+
+  function renderSessionTimeoutCountdown(remainingMs) {
+    const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = String(totalSeconds % 60).padStart(2, '0');
+    if (els['session-timeout-countdown']) {
+      els['session-timeout-countdown'].textContent = `${minutes}:${seconds}`;
+    }
+  }
+
+  function showSessionTimeoutWarning(remainingMs) {
+    state.idleWarningActive = true;
+    renderSessionTimeoutCountdown(remainingMs);
+    if (els['session-timeout-dialog'] && !els['session-timeout-dialog'].open) {
+      els['session-timeout-dialog'].showModal();
+      syncDialogState();
+      setTimeout(() => els['session-timeout-continue']?.focus(), 50);
+    }
+  }
+
+  function clearLocalSupabaseSessionFallback() {
+    try {
+      const projectRef = new URL(cfg.supabaseUrl).hostname.split('.')[0];
+      if (projectRef) localStorage.removeItem(`sb-${projectRef}-auth-token`);
+    } catch {}
+  }
+
+  async function endSessionSecurely({ manual = false } = {}) {
+    if (state.idleSigningOut) return;
+    state.idleSigningOut = true;
+    state.sessionGeneration += 1;
+    state.session = null;
+    state.profile = null;
+    state.loadedUserId = null;
+    state.pushIntentHandled = false;
+
+    let timeoutId = null;
+    try {
+      const cleanupSteps = [
+        stopIdleSessionGuard,
+        closeSessionTimeoutWarning,
+        stopLiveSync,
+        clearProfileDraft,
+        clearForcePasswordDialog,
+        clearMfaDialogs
+      ];
+      cleanupSteps.forEach(cleanup => {
+        try { cleanup(); }
+        catch (error) { console.warn('No se pudo completar una limpieza auxiliar de sesión.', error); }
+      });
+      try { showAuth(); }
+      catch (error) { console.warn('No se pudo redibujar el acceso durante el cierre de sesión.', error); }
+
+      try {
+        const { error } = await Promise.race([
+          client.auth.signOut({ scope: 'local' }),
+          new Promise((resolve) => {
+            timeoutId = setTimeout(
+              () => resolve({ error: new Error('Tiempo agotado al cerrar la sesión') }),
+              SESSION_SIGNOUT_TIMEOUT_MS
+            );
+          })
+        ]);
+        if (error) throw error;
+      } catch (error) {
+        console.warn('No se pudo cerrar la sesion remota; se limpiara la sesion local.', error);
+      }
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      clearLocalSupabaseSessionFallback();
+      state.idleSigningOut = false;
+      try {
+        toast(
+          manual
+            ? 'Tu sesión se cerró de forma segura.'
+            : `Tu sesión se cerró después de ${SESSION_IDLE_MINUTES} minutos sin actividad. Vuelve a ingresar para continuar.`,
+          !manual
+        );
+      } catch {}
+      setTimeout(() => location.reload(), 400);
+    }
+  }
+
+  async function logoutForInactivity() {
+    await endSessionSecurely({ manual: false });
+  }
+
+  async function checkIdleSession() {
+    if (!state.session || state.idleSigningOut) return;
+    const lastActivity = readIdleActivity() || Date.now();
+    const remaining = SESSION_IDLE_MS - (Date.now() - lastActivity);
+    if (remaining <= 0) {
+      await logoutForInactivity();
+      return;
+    }
+    if (remaining <= SESSION_WARNING_MS) showSessionTimeoutWarning(remaining);
+    else if (state.idleWarningActive) closeSessionTimeoutWarning();
+  }
+
+  async function startIdleSessionGuard() {
+    stopIdleSessionGuard();
+    if (!readIdleActivity()) writeIdleActivity(Date.now());
+    if (Date.now() - readIdleActivity() >= SESSION_IDLE_MS) {
+      await logoutForInactivity();
+      return false;
+    }
+    state.idleTimer = setInterval(() => {
+      checkIdleSession().catch(error => console.warn('No se pudo comprobar la inactividad.', error));
+    }, 1000);
+    return true;
+  }
+
+  function stopIdleSessionGuard() {
+    if (state.idleTimer) clearInterval(state.idleTimer);
+    state.idleTimer = null;
+    closeSessionTimeoutWarning();
+  }
+
+  function continueIdleSession() {
+    writeIdleActivity(Date.now());
+    closeSessionTimeoutWarning();
+    toast(`Sesión activa por otros ${SESSION_IDLE_MINUTES} minutos mientras continúes trabajando.`);
+  }
+
   const securityDialogIds = new Set([
     'force-password-dialog',
     'mfa-setup-dialog',
-    'mfa-verify-dialog'
+    'mfa-verify-dialog',
+    'push-onboarding-dialog',
+    'session-timeout-dialog'
   ]);
 
   function setSecurityGateLocked(locked) {
@@ -1224,21 +1556,35 @@
   function restoreRequiredSecurityDialog() {
     if (!state.securityGateLocked) return;
 
-    if (state.forcePasswordChangeActive && state.profile?.must_change_password && els['force-password-dialog'] && !els['force-password-dialog'].open) {
-      els['force-password-dialog'].showModal();
-      setTimeout(() => byId('force-current-password')?.focus(), 50);
+    if (state.forcePasswordChangeActive && state.profile?.must_change_password && els['force-password-dialog']) {
+      if (!els['force-password-dialog'].open) {
+        els['force-password-dialog'].showModal();
+        setTimeout(() => byId('force-current-password')?.focus(), 50);
+      }
       return;
     }
 
-    if (state.mfaRequiredActive && state.mfa?.mode === 'enroll' && els['mfa-setup-dialog'] && !els['mfa-setup-dialog'].open) {
-      els['mfa-setup-dialog'].showModal();
-      setTimeout(() => byId('mfa-setup-code')?.focus(), 50);
+    if (state.mfaRequiredActive && state.mfa?.mode === 'enroll' && els['mfa-setup-dialog']) {
+      if (!els['mfa-setup-dialog'].open) {
+        els['mfa-setup-dialog'].showModal();
+        setTimeout(() => byId('mfa-setup-code')?.focus(), 50);
+      }
       return;
     }
 
-    if (state.mfaRequiredActive && state.mfa?.mode === 'verify' && els['mfa-verify-dialog'] && !els['mfa-verify-dialog'].open) {
-      els['mfa-verify-dialog'].showModal();
-      setTimeout(() => byId('mfa-verify-code')?.focus(), 50);
+    if (state.mfaRequiredActive && state.mfa?.mode === 'verify' && els['mfa-verify-dialog']) {
+      if (!els['mfa-verify-dialog'].open) {
+        els['mfa-verify-dialog'].showModal();
+        setTimeout(() => byId('mfa-verify-code')?.focus(), 50);
+      }
+      return;
+    }
+
+    if (state.pushComplianceGateActive && els['push-onboarding-dialog']) {
+      if (!els['push-onboarding-dialog'].open) {
+        els['push-onboarding-dialog'].showModal();
+        setTimeout(() => els['push-onboarding-activate']?.focus(), 50);
+      }
       return;
     }
 
@@ -1300,6 +1646,7 @@
   function showApp() {
     closeOpenDialogs({ keepSecurity: true });
     closeMobileMenu();
+    clearLoginConnectivityStatus();
     els['auth-view'].classList.add('hidden');
     els['app-view'].classList.remove('hidden');
   }
@@ -1365,33 +1712,45 @@
     return /(?:^|[?&#])type=recovery(?:&|$)/i.test(value);
   }
 
-  async function loadProtectedAppData() {
+  async function loadProtectedAppData(expectedUserId = state.session?.user?.id, expectedGeneration = state.sessionGeneration) {
     if (!state.session || !state.profile) return;
     await Promise.all([
       loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(),
       loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(),
-      loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadAccessRecoveryRequests()
+      loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadUserCompliance(), loadAccessRecoveryRequests()
     ]);
+    if (state.sessionGeneration !== expectedGeneration || state.session?.user?.id !== expectedUserId) return;
     renderAll();
     handleOpenIntentFromUrl();
     startLiveSync();
     state.loadedUserId = state.session.user.id;
-    renderPushSubscriptionStatus();
-    setSecurityGateLocked(false);
+    if (isActive()) await enforcePushCompliance({ force: true });
+    else setSecurityGateLocked(false);
   }
 
   async function handleSession(session, force = false) {
+    const previousUserId = state.session?.user?.id || null;
+    const nextUserId = session?.user?.id || null;
+    if (!session || previousUserId !== nextUserId) state.sessionGeneration += 1;
+    const sessionGeneration = state.sessionGeneration;
     state.session = session;
     if (!session) {
+      state.sessionLoadPromise = null;
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
       state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null; state.accessRecoveryRequests = [];
       state.adminDashboard = null; state.superadminProcesses = []; state.superadminProcessError = null; state.superadminEmailControls = null; state.emailSystemStatus = null; state.emailSystemError = null; state.emailDeliveries = [];
-      clearForcePasswordDialog(); clearMfaDialogs(); stopLiveSync();
+      state.pushSubscriptions = []; state.pushSystemStatus = null; state.pushDeliveries = []; state.pushCompliance = null; state.pushComplianceAvailable = false; state.pushComplianceGateActive = false; state.pushAdminBypass = false; state.pushDeviceState = null; state.pushPolicy = null; state.pushCoverage = []; state.pushCoverageError = null; state.pushLastComplianceSyncAt = 0;
+      state.userCompliance = []; state.userComplianceError = null;
+      state.pushIntentHandled = false;
+      clearForcePasswordDialog(); clearMfaDialogs(); stopLiveSync(); stopIdleSessionGuard();
       setSecurityGateLocked(false);
       showAuth(); return;
     }
 
     const userId = session.user.id;
+    if (!state.idleTimer && !(await startIdleSessionGuard())) return;
+    await checkIdleSession();
+    if (!state.session) return;
 
     // Cuando el navegador refresca el token o el usuario regresa a la pestaña,
     // Supabase puede disparar onAuthStateChange aunque la aplicación ya esté
@@ -1401,27 +1760,40 @@
       showApp();
       if (state.profile?.must_change_password) { await prepareForcedPasswordChange(); return; }
       if (!(await enforceMfaForAll())) return;
-      setSecurityGateLocked(false);
+      if (isActive()) {
+        setSecurityGateLocked(true);
+        await enforcePushCompliance({ force: false });
+      } else {
+        setSecurityGateLocked(false);
+      }
       return;
     }
 
     setSecurityGateLocked(true);
     if (state.sessionLoadPromise) return state.sessionLoadPromise;
-    state.sessionLoadPromise = (async () => {
+    const sessionLoadPromise = (async () => {
       stopLiveSync();
-      await loadProfile(); showApp(); configureAppForProfile();
+      if (!(await loadProfile(userId))) return;
+      if (state.sessionGeneration !== sessionGeneration || state.session?.user?.id !== userId) return;
+      showApp(); configureAppForProfile();
       if (state.profile?.must_change_password) { await prepareForcedPasswordChange(); state.loadedUserId = userId; return; }
       if (!(await enforceMfaForAll())) { state.loadedUserId = userId; return; }
-      await loadProtectedAppData();
+      if (state.sessionGeneration !== sessionGeneration || state.session?.user?.id !== userId) return;
+      await loadProtectedAppData(userId, sessionGeneration);
     })();
-    try { await state.sessionLoadPromise; } finally { state.sessionLoadPromise = null; }
+    state.sessionLoadPromise = sessionLoadPromise;
+    try { await sessionLoadPromise; }
+    finally { if (state.sessionLoadPromise === sessionLoadPromise) state.sessionLoadPromise = null; }
   }
 
 
-  async function loadProfile() {
-    const { data, error } = await client.from('profiles').select('*').eq('id', state.session.user.id).single();
+  async function loadProfile(expectedUserId = state.session?.user?.id) {
+    if (!expectedUserId) return false;
+    const { data, error } = await client.from('profiles').select('*').eq('id', expectedUserId).single();
     if (error) throw error;
+    if (state.session?.user?.id !== expectedUserId) return false;
     state.profile = data;
+    return true;
   }
 
   async function loadProfiles() {
@@ -1477,7 +1849,7 @@
     const { data, error } = await client.rpc('superadmin_list_process_control', {
       p_scope: 'all',
       p_search: null,
-      p_limit: 500
+      p_limit: 2000
     });
     if (error) {
       console.warn('No se pudo cargar el control global de procesos.', error);
@@ -1607,6 +1979,154 @@
       </article>`;
     }).join('') : '<div class="empty">No hay procesos que coincidan con los filtros.</div>';
     els['process-control-list'].innerHTML = loadError + resultNotice + cards;
+  }
+
+  async function loadUserCompliance(throwOnError = false) {
+    if (!canUseSuperadminOversight()) {
+      state.userCompliance = [];
+      state.userComplianceError = null;
+      return;
+    }
+    const { data, error } = await client.rpc('superadmin_list_user_compliance', {
+      p_scope: 'all',
+      p_search: null,
+      p_limit: 2000
+    });
+    if (error) {
+      console.warn('No se pudo cargar el cumplimiento por persona.', error);
+      state.userCompliance = [];
+      state.userComplianceError = error.message || 'No se pudo consultar el reporte por persona.';
+      if (throwOnError) throw error;
+      return;
+    }
+    state.userCompliance = Array.isArray(data) ? data : [];
+    state.userComplianceError = null;
+  }
+
+  function userComplianceMatches(row) {
+    const scope = els['user-compliance-filter']?.value || 'all';
+    const search = String(els['user-compliance-search']?.value || '').trim().toLowerCase();
+    const pending = Number(row.pending_actions || 0);
+    const current = Number(row.current_actions || 0);
+    const overdue = Number(row.overdue_current_actions || 0);
+    const matchesScope = scope === 'all'
+      || (scope === 'pending' && pending > 0)
+      || (scope === 'blocking' && current > 0)
+      || (scope === 'overdue' && overdue > 0)
+      || (scope === 'attention' && (overdue > 0 || row.profile_status !== 'active' && current > 0))
+      || (scope === 'completed' && Number(row.completed_actions || 0) > 0 && pending === 0);
+    if (!matchesScope) return false;
+    if (!search) return true;
+    return [row.full_name, row.email, row.department, row.role]
+      .filter(Boolean).join(' ').toLowerCase().includes(search);
+  }
+
+  function renderUserCompliance() {
+    if (!canUseSuperadminOversight() || !els['user-compliance-list']) return;
+    const all = state.userCompliance || [];
+    const rows = all.filter(userComplianceMatches);
+    const reportedTotal = Number(all[0]?.total_people_count ?? all.length);
+    const totals = [
+      ['Personas con actividad', reportedTotal],
+      ['Con pendientes', all.filter(row => Number(row.pending_actions || 0) > 0).length],
+      ['Con turno activo', all.filter(row => Number(row.current_actions || 0) > 0).length],
+      ['Turnos vencidos', all.filter(row => Number(row.overdue_current_actions || 0) > 0).length],
+      ['Cuentas no activas con turno', all.filter(row => row.profile_status !== 'active' && Number(row.current_actions || 0) > 0).length]
+    ];
+    if (els['user-compliance-summary']) {
+      els['user-compliance-summary'].innerHTML = totals.map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${Number(value)}</strong></article>`).join('');
+    }
+    if (state.userComplianceError) {
+      els['user-compliance-list'].innerHTML = `<div class="email-system-warning danger"><strong>No se pudo actualizar el reporte.</strong><span>${escapeHtml(state.userComplianceError)}</span></div>`;
+      return;
+    }
+    if (!rows.length) {
+      els['user-compliance-list'].innerHTML = '<div class="empty">No hay personas que coincidan con los filtros.</div>';
+      return;
+    }
+    const resultNotice = reportedTotal > all.length
+      ? `<div class="email-system-warning"><strong>Vista limitada a ${all.length} personas.</strong><span>Hay ${reportedTotal} personas con actividad. La lista prioriza cuentas no activas, vencimientos y pendientes.</span></div>`
+      : '';
+    els['user-compliance-list'].innerHTML = `${resultNotice}<div class="user-compliance-grid">${rows.map(row => {
+      const pendingItems = Array.isArray(row.pending_items) ? row.pending_items : [];
+      const completedItems = Array.isArray(row.completed_items) ? row.completed_items : [];
+      const overdue = Number(row.overdue_current_actions || 0);
+      const current = Number(row.current_actions || 0);
+      const pending = Number(row.pending_actions || 0);
+      const stateClass = overdue > 0 || row.profile_status !== 'active' && current > 0 ? 'danger' : current > 0 || pending > 0 ? 'warning' : 'success';
+      const stateLabel = overdue > 0 ? 'Turno vencido' : row.profile_status !== 'active' && current > 0 ? 'Cuenta no activa con turno' : current > 0 ? 'Turno activo' : pending > 0 ? 'En espera' : 'Sin pendientes';
+      const compliance = row.on_time_rate == null ? 'Sin base' : `${Number(row.on_time_rate).toFixed(1)}%`;
+      const completedActionLabels = { approved: 'Aprobó', signed: 'Firmó', rejected: 'Rechazó' };
+      return `<article class="user-compliance-card ${stateClass}">
+        <div class="user-compliance-head"><div><h3>${escapeHtml(row.full_name || row.email)}</h3><p>${escapeHtml(row.email || '')}${row.department ? ` · ${escapeHtml(row.department)}` : ''}</p></div><span class="pill ${stateClass}">${escapeHtml(stateLabel)}</span></div>
+        <div class="user-compliance-facts">
+          <span><b>${pending}</b> pendientes</span><span><b>${Number(row.pending_approvals || 0)}</b> por aprobar</span><span><b>${Number(row.pending_signatures || 0)}</b> por firmar</span><span><b>${current}</b> turno activo</span>
+        </div>
+        <div class="user-compliance-history"><span>Acciones realizadas <b>${Number(row.completed_actions || 0)}</b></span><span>Cumplimiento con fecha límite <b>${compliance}</b></span><span>Después del vencimiento <b>${Number(row.late_actions || 0)}</b></span><span>Sin fecha límite <b>${Number(row.undated_actions || 0)}</b></span><span>Última acción <b>${row.last_action_at ? fmtDate(row.last_action_at) : 'Sin registro'}</b></span></div>
+        ${pendingItems.length ? `<details><summary>Ver ${pendingItems.length} pendiente${pendingItems.length === 1 ? '' : 's'}</summary><ul class="user-pending-list">${pendingItems.map(item => `<li class="${item.is_overdue ? 'is-overdue' : ''}"><div><strong>${escapeHtml(item.document_title || 'Documento')}</strong><span>${escapeHtml(participantRoleLabels[item.participant_role] || item.participant_role || 'Acción')} · ${item.document_status === 'paused' ? 'proceso pausado' : item.is_current ? 'turno activo' : 'esperando turno'}</span></div><div><span>${item.due_at ? fmtDate(item.due_at) : 'Sin fecha límite'}</span><button class="secondary compact" type="button" data-open-document="${item.document_id}">Abrir</button></div></li>`).join('')}</ul></details>` : '<p class="user-compliance-clear">No tiene aprobaciones ni firmas pendientes.</p>'}
+        ${completedItems.length ? `<details><summary>Historial reciente: ${completedItems.length} de ${Number(row.completed_actions || 0)} acciones</summary><ul class="user-pending-list user-history-list">${completedItems.map(item => `<li class="${item.is_late ? 'is-overdue' : ''}"><div><strong>${escapeHtml(item.document_title || 'Documento')}</strong><span>${escapeHtml(completedActionLabels[item.action_status] || item.action_status || 'Atendió')} · ${item.acted_at ? fmtDate(item.acted_at) : 'Sin fecha registrada'}</span></div><div><span>${item.due_at ? `${item.is_late ? 'Fuera de fecha' : 'En tiempo'} · límite ${fmtDate(item.due_at)}` : 'Sin fecha límite'}</span><button class="secondary compact" type="button" data-open-document="${item.document_id}">Abrir</button></div></li>`).join('')}</ul></details>` : ''}
+      </article>`;
+    }).join('')}</div>`;
+  }
+
+  function csvCell(value) {
+    let text = String(value ?? '');
+    if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  function downloadUserComplianceCsv() {
+    if (!canUseSuperadminOversight()) return;
+    const rows = (state.userCompliance || []).filter(userComplianceMatches);
+    if (!rows.length) {
+      toast('No hay filas para descargar con el filtro actual.', true);
+      return;
+    }
+    const header = [
+      'Nombre','Correo','Área','Estado de cuenta','Asignaciones','Pendientes','Por aprobar','Por firmar',
+      'Turnos activos','Turnos vencidos','Acciones realizadas','Antes del vencimiento','Después del vencimiento',
+      'Sin fecha límite','Cumplimiento con fecha %','Última acción','Tipo de registro','Documento','Responsabilidad',
+      'Estado de acción','Turno actual','Fecha límite','Fecha realizada','Fuera de fecha'
+    ];
+    const detailRows = [];
+    const completedActionLabels = { approved: 'Aprobó', signed: 'Firmó', rejected: 'Rechazó' };
+    rows.forEach(row => {
+      const base = [
+        row.full_name, row.email, row.department, row.profile_status,
+        row.assigned_actions, row.pending_actions, row.pending_approvals, row.pending_signatures,
+        row.current_actions, row.overdue_current_actions, row.completed_actions,
+        row.on_time_actions, row.late_actions, row.undated_actions, row.on_time_rate, row.last_action_at
+      ];
+      const pendingItems = Array.isArray(row.pending_items) ? row.pending_items : [];
+      const completedItems = Array.isArray(row.completed_items) ? row.completed_items : [];
+      const actions = [
+        ...pendingItems.map(item => [
+          'Pendiente', item.document_title,
+          participantRoleLabels[item.participant_role] || item.participant_role || 'Acción',
+          item.document_status === 'paused' ? 'Proceso pausado' : item.is_current ? 'Turno activo' : 'Esperando turno',
+          item.is_current ? 'Sí' : 'No', item.due_at, '', item.is_overdue ? 'Sí' : 'No'
+        ]),
+        ...completedItems.map(item => [
+          'Historial reciente', item.document_title,
+          participantRoleLabels[item.participant_role] || item.participant_role || 'Acción',
+          completedActionLabels[item.action_status] || item.action_status || 'Atendió',
+          'No', item.due_at, item.acted_at,
+          item.is_late == null ? 'Sin fecha límite' : item.is_late ? 'Sí' : 'No'
+        ])
+      ];
+      if (!actions.length) actions.push(['Resumen','','','','','','','']);
+      actions.forEach(action => detailRows.push([...base, ...action]));
+    });
+    const output = [header, ...detailRows].map(line => line.map(csvCell).join(',')).join('\r\n');
+    const blob = new Blob([`\uFEFF${output}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `lumen-sign-cumplimiento-detallado-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function processReviewDeadlinesOnce() {
@@ -2051,7 +2571,16 @@
 
 
   function pushSupported() {
-    return Boolean('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window);
+    return Boolean(window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window);
+  }
+
+  function isIosDevice() {
+    return /iphone|ipad|ipod/i.test(navigator.userAgent || '')
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  function isStandaloneApp() {
+    return Boolean(window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true);
   }
 
   function urlBase64ToUint8Array(value) {
@@ -2063,13 +2592,48 @@
 
   function currentDeviceLabel() {
     const ua = navigator.userAgent || '';
-    if (/iphone|ipad/i.test(ua)) return 'Apple Safari';
-    if (/android/i.test(ua)) return 'Android';
-    if (/edg\//i.test(ua)) return 'Microsoft Edge';
-    if (/chrome|chromium/i.test(ua)) return 'Google Chrome';
-    if (/firefox/i.test(ua)) return 'Mozilla Firefox';
-    if (/safari/i.test(ua)) return 'Safari';
+    if (isIosDevice()) return isStandaloneApp() ? 'iPhone o iPad · App instalada' : 'iPhone o iPad · Safari';
+    if (/android/i.test(ua)) return 'Teléfono o tableta Android';
+    if (/edg\//i.test(ua)) return 'Computadora · Microsoft Edge';
+    if (/chrome|chromium/i.test(ua)) return 'Computadora · Google Chrome';
+    if (/firefox/i.test(ua)) return 'Computadora · Mozilla Firefox';
+    if (/safari/i.test(ua)) return 'Computadora · Safari';
     return 'Navegador actual';
+  }
+
+  function currentPlatformLabel() {
+    const ua = navigator.userAgent || '';
+    if (isIosDevice()) return 'iOS/iPadOS';
+    if (/android/i.test(ua)) return 'Android';
+    if (/windows/i.test(ua)) return 'Windows';
+    if (/macintosh|mac os/i.test(ua)) return 'macOS';
+    if (/linux/i.test(ua)) return 'Linux';
+    return 'Otro';
+  }
+
+  function currentBrowserLabel() {
+    const ua = navigator.userAgent || '';
+    if (/edg\//i.test(ua)) return 'Microsoft Edge';
+    if (/firefox/i.test(ua)) return 'Mozilla Firefox';
+    if (/crios/i.test(ua)) return 'Chrome en iOS';
+    if (/fxios/i.test(ua)) return 'Firefox en iOS';
+    if (/chrome|chromium/i.test(ua)) return 'Google Chrome';
+    if (/safari/i.test(ua)) return 'Safari';
+    return 'Navegador';
+  }
+
+  function getOrCreatePushDeviceKey() {
+    const storageKey = 'lumen-sign:push-device-key';
+    try {
+      let value = localStorage.getItem(storageKey);
+      if (!value) {
+        value = crypto.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(storageKey, value);
+      }
+      return value;
+    } catch {
+      return `session-${state.session?.user?.id || 'unknown'}`;
+    }
   }
 
   async function getPushRegistration() {
@@ -2083,6 +2647,253 @@
     return registration.pushManager.getSubscription();
   }
 
+  async function inspectPushDeviceState() {
+    const base = {
+      deviceKey: getOrCreatePushDeviceKey(),
+      deviceLabel: currentDeviceLabel(),
+      platform: currentPlatformLabel(),
+      browser: currentBrowserLabel(),
+      installed: isStandaloneApp(),
+      supported: pushSupported(),
+      permission: 'Notification' in window ? Notification.permission : 'unsupported',
+      capability: 'unknown',
+      subscription: null,
+      endpoint: null,
+      lastErrorCode: ''
+    };
+
+    if (isIosDevice() && !base.installed) {
+      return { ...base, capability: 'installation_required' };
+    }
+    if (!window.isSecureContext) {
+      return { ...base, supported: false, capability: 'unsupported', lastErrorCode: 'insecure_context' };
+    }
+    if (!base.supported) return { ...base, capability: 'unsupported', lastErrorCode: 'push_unsupported' };
+    if (base.permission === 'denied') return { ...base, capability: 'permission_denied', lastErrorCode: 'permission_denied' };
+    if (base.permission === 'default') return { ...base, capability: 'permission_required' };
+
+    try {
+      const subscription = await currentPushSubscription();
+      if (!subscription) return { ...base, capability: 'subscription_missing' };
+      return { ...base, capability: 'active', subscription, endpoint: subscription.endpoint };
+    } catch (error) {
+      return {
+        ...base,
+        capability: isConnectivityError(error) ? 'network_error' : 'registration_error',
+        lastErrorCode: isConnectivityError(error) ? 'push_network_error' : 'push_registration_error'
+      };
+    }
+  }
+
+  function missingPushComplianceRpc(error) {
+    const text = errorText(error);
+    return text.includes('report_my_push_device')
+      && (error?.code === 'PGRST202' || text.includes('not find') || text.includes('does not exist'));
+  }
+
+  async function registerExistingPushSubscription(subscription) {
+    if (!subscription) return;
+    const payload = subscription.toJSON();
+    const { error } = await client.rpc('upsert_push_subscription', {
+      p_endpoint: payload.endpoint,
+      p_p256dh: payload.keys?.p256dh || '',
+      p_auth: payload.keys?.auth || '',
+      p_user_agent: navigator.userAgent || '',
+      p_device_label: currentDeviceLabel()
+    });
+    if (error) throw error;
+  }
+
+  async function reportPushDeviceState(device, wasPrompted = false) {
+    const { data, error } = await client.rpc('report_my_push_device', {
+      p_device_key: device.deviceKey,
+      p_device_label: device.deviceLabel,
+      p_platform: device.platform,
+      p_browser: device.browser,
+      p_permission_status: device.permission,
+      p_capability_state: device.capability,
+      p_push_supported: device.supported,
+      p_is_installed: device.installed,
+      p_endpoint: device.endpoint,
+      p_user_agent: navigator.userAgent || '',
+      p_last_error_code: device.lastErrorCode || '',
+      p_was_prompted: Boolean(wasPrompted)
+    });
+    if (error) throw error;
+    return data || null;
+  }
+
+  async function syncPushCompliance({ force = false, wasPrompted = false } = {}) {
+    if (!state.session || !state.profile || !isActive()) return null;
+    const currentPermission = 'Notification' in window ? Notification.permission : 'unsupported';
+    const permissionUnchanged = !state.pushDeviceState || state.pushDeviceState.permission === currentPermission;
+    if (!force && permissionUnchanged && Date.now() - state.pushLastComplianceSyncAt < 5 * 60 * 1000 && state.pushCompliance) return state.pushCompliance;
+
+    const device = await inspectPushDeviceState();
+    state.pushDeviceState = device;
+    try {
+      let compliance = await reportPushDeviceState(device, wasPrompted);
+      if (device.subscription && !compliance?.compliant) {
+        await registerExistingPushSubscription(device.subscription);
+        compliance = await reportPushDeviceState(device, wasPrompted);
+      }
+      if (!compliance || compliance.available !== true || typeof compliance.enforcement_enabled !== 'boolean') {
+        throw new Error('La validación Push devolvió una respuesta incompleta');
+      }
+      state.pushCompliance = compliance;
+      state.pushComplianceAvailable = true;
+      state.pushLastComplianceSyncAt = Date.now();
+      return compliance;
+    } catch (error) {
+      if (missingPushComplianceRpc(error)) {
+        console.warn('La política obligatoria Push todavía no está instalada.', error);
+        state.pushComplianceAvailable = false;
+        state.pushCompliance = null;
+      } else {
+        console.warn('No se pudo sincronizar el cumplimiento Push.', error);
+        state.pushDeviceState = { ...device, capability: 'network_error', lastErrorCode: 'compliance_sync_error' };
+        // Una falla de validacion no debe convertirse en una forma de saltar la
+        // activacion obligatoria. El superadministrador conserva su salida de
+        // emergencia de sesion y cualquier persona puede cerrar sesion.
+        state.pushComplianceAvailable = true;
+        state.pushCompliance = {
+          available: true,
+          enforcement_enabled: true,
+          compliant: false,
+          exempt: false,
+          sync_error: true
+        };
+      }
+      return null;
+    }
+  }
+
+  function pushCapabilityLabel(value) {
+    return ({
+      active: 'Activo', missing: 'Sin activar', denied: 'Permiso rechazado',
+      permission_required: 'Falta permitir', permission_denied: 'Permiso rechazado',
+      installation_required: 'Falta instalar', unsupported: 'No compatible',
+      subscription_missing: 'Falta registrar', registration_error: 'Error de registro',
+      network_error: 'Error de red', error: 'Con error', stale: 'Sin actividad', exempt: 'Excepción temporal'
+    })[value] || 'Pendiente';
+  }
+
+  function pushOnboardingPresentation() {
+    const device = state.pushDeviceState || { capability: 'unknown', browser: 'Navegador' };
+    const compliance = state.pushCompliance || {};
+    if (compliance.exempt) return {
+      tone: 'warning', title: 'Excepción técnica temporal',
+      detail: `Puedes continuar hasta ${fmtDate(compliance.exemption_expires_at)}. El superadministrador registró el motivo: ${compliance.exemption_reason || 'restricción técnica'}.`,
+      steps: [], canActivate: false, canCheck: false
+    };
+    if (compliance.compliant || device.capability === 'active' && !state.pushComplianceAvailable) return {
+      tone: 'success', title: 'Notificaciones activadas',
+      detail: 'Este dispositivo está listo para recibir avisos flotantes de Lumen Sign.',
+      steps: [], canActivate: false, canCheck: false
+    };
+    if (device.capability === 'installation_required') return {
+      tone: 'warning', title: 'Instala Lumen Sign en este iPhone o iPad',
+      detail: 'Apple solo permite estas notificaciones desde una web instalada en la pantalla de inicio.',
+      steps: ['En Safari, toca el botón Compartir.', 'Elige “Agregar a pantalla de inicio”.', 'Abre Lumen Sign desde el nuevo icono y vuelve a activar las notificaciones.'],
+      canActivate: false, canCheck: true, checkLabel: 'Ya la instalé, comprobar'
+    };
+    if (device.capability === 'permission_denied') return {
+      tone: 'danger', title: 'El navegador bloqueó las notificaciones',
+      detail: 'Lumen Sign no puede volver a abrir el permiso automáticamente. Debes cambiarlo en la configuración del navegador o del sitio.',
+      steps: [`Abre la configuración de permisos de ${device.browser || 'tu navegador'}.`, 'Busca Notificaciones y permite Lumen Sign.', 'Regresa aquí y presiona “Ya lo corregí, comprobar”.'],
+      canActivate: false, canCheck: true
+    };
+    if (device.capability === 'unsupported') return {
+      tone: 'danger', title: 'Este navegador no puede recibir notificaciones',
+      detail: 'Abre Lumen Sign en Chrome, Edge, Firefox o Safari actualizado. En iPhone o iPad, instálalo primero en la pantalla de inicio.',
+      steps: ['Copia o vuelve a abrir la liga en un navegador compatible.', 'Inicia sesión y activa las notificaciones en ese dispositivo.'],
+      canActivate: false, canCheck: true
+    };
+    if (['network_error','registration_error'].includes(device.capability)) return {
+      tone: 'danger', title: 'No se pudo registrar este dispositivo',
+      detail: 'Revisa la conexión o intenta desde otra red. Tu cuenta y tus tareas no fueron modificadas.',
+      steps: ['Comprueba que el equipo tenga Internet.', 'Si estás en una red corporativa, prueba con datos móviles.', 'Vuelve a comprobar el registro.'],
+      canActivate: false, canCheck: true
+    };
+    return {
+      tone: 'info', title: device.capability === 'subscription_missing' ? 'Completa el registro de este dispositivo' : 'Permite las notificaciones',
+      detail: 'Pulsa el botón y después elige “Permitir” en la ventana del navegador.',
+      steps: ['Pulsa “Activar notificaciones”.', 'Cuando el navegador pregunte, elige “Permitir”.', 'Lumen Sign comprobará automáticamente el registro.'],
+      canActivate: true, canCheck: false
+    };
+  }
+
+  function renderPushOnboarding() {
+    const view = pushOnboardingPresentation();
+    if (els['push-onboarding-title']) els['push-onboarding-title'].textContent = view.title;
+    if (els['push-onboarding-copy']) els['push-onboarding-copy'].textContent = view.detail;
+    if (els['push-onboarding-status']) {
+      els['push-onboarding-status'].className = `push-onboarding-status ${view.tone}`;
+      els['push-onboarding-status'].textContent = view.title;
+    }
+    if (els['push-onboarding-steps']) {
+      els['push-onboarding-steps'].innerHTML = view.steps.map(step => `<li>${escapeHtml(step)}</li>`).join('');
+      els['push-onboarding-steps'].classList.toggle('hidden', !view.steps.length);
+    }
+    els['push-onboarding-activate']?.classList.toggle('hidden', !view.canActivate);
+    els['push-onboarding-check']?.classList.toggle('hidden', !view.canCheck);
+    if (els['push-onboarding-check']) els['push-onboarding-check'].textContent = view.checkLabel || 'Ya lo corregí, comprobar';
+    els['push-onboarding-admin-bypass']?.classList.toggle('hidden', !isSuperAdmin() || state.pushAdminBypass || state.pushCompliance?.compliant || state.pushCompliance?.exempt);
+  }
+
+  function renderPushComplianceBanner() {
+    const banner = els['push-compliance-banner'];
+    if (!banner) return;
+    if (!state.pushComplianceAvailable || !state.pushCompliance?.enforcement_enabled) {
+      banner.classList.add('hidden');
+      return;
+    }
+    const resolved = state.pushCompliance?.compliant && !state.pushAdminBypass;
+    if (resolved && !state.pushCompliance?.exempt) {
+      banner.classList.add('hidden');
+      return;
+    }
+    const view = pushOnboardingPresentation();
+    els['push-compliance-banner-title'].textContent = state.pushAdminBypass ? 'Entraste sin activar este dispositivo' : view.title;
+    els['push-compliance-banner-copy'].textContent = state.pushAdminBypass
+      ? 'La excepción de sesión solo sirve para administrar; tu cobertura seguirá apareciendo como pendiente.'
+      : view.detail;
+    banner.classList.toggle('danger', ['danger','warning'].includes(view.tone) || state.pushAdminBypass);
+    banner.classList.remove('hidden');
+  }
+
+  function closePushComplianceGate() {
+    state.pushComplianceGateActive = false;
+    if (els['push-onboarding-dialog']?.open) els['push-onboarding-dialog'].close();
+    if (!state.forcePasswordChangeActive && !state.mfaRequiredActive) setSecurityGateLocked(false);
+  }
+
+  function openPushComplianceGate() {
+    state.pushComplianceGateActive = true;
+    renderPushOnboarding();
+    setSecurityGateLocked(true);
+    if (els['push-onboarding-dialog'] && !els['push-onboarding-dialog'].open) {
+      openExclusiveDialog(els['push-onboarding-dialog']);
+      setTimeout(() => els['push-onboarding-activate']?.focus(), 50);
+    }
+  }
+
+  async function enforcePushCompliance(options = {}) {
+    if (!state.session || !state.profile || !isActive() || state.forcePasswordChangeActive || state.mfaRequiredActive) return;
+    await syncPushCompliance(options);
+    await renderPushSubscriptionStatus();
+    renderPushComplianceBanner();
+    renderPushOnboarding();
+
+    const resolved = !state.pushComplianceAvailable
+      || !state.pushCompliance?.enforcement_enabled
+      || state.pushCompliance?.compliant
+      || state.pushCompliance?.exempt
+      || state.pushAdminBypass;
+    if (resolved) closePushComplianceGate();
+    else openPushComplianceGate();
+  }
+
   async function loadPushSubscriptions() {
     if (!state.session || !isActive()) { state.pushSubscriptions = []; return; }
     try {
@@ -2090,95 +2901,144 @@
       if (error) throw error;
       state.pushSubscriptions = data || [];
     } catch (error) {
-      console.warn('No se pudo cargar push.', error);
+      console.warn('No se pudo cargar Push.', error);
       state.pushSubscriptions = [];
     }
   }
 
-  async function loadPushSystemStatus() {
-    if (!isAdmin()) { state.pushSystemStatus = null; state.pushDeliveries = []; return; }
-    try {
-      const [statusResponse, deliveriesResponse] = await Promise.all([
-        client.rpc('get_push_system_status'),
-        client.rpc('list_recent_notification_deliveries', { p_limit: 60 })
-      ]);
-      if (statusResponse.error) throw statusResponse.error;
-      if (deliveriesResponse.error) throw deliveriesResponse.error;
-      state.pushSystemStatus = statusResponse.data || null;
-      state.pushDeliveries = deliveriesResponse.data || [];
-    } catch (error) {
-      console.warn('No se pudo cargar evidencia push.', error);
-      state.pushSystemStatus = null;
-      state.pushDeliveries = [];
+  async function loadPushSystemStatus(throwOnError = false) {
+    if (!canUseSuperadminOversight()) {
+      state.pushSystemStatus = null; state.pushDeliveries = []; state.pushPolicy = null; state.pushCoverage = []; state.pushCoverageError = null; return;
     }
+    const [statusResponse, deliveriesResponse, policyResponse, coverageResponse] = await Promise.all([
+      client.rpc('superadmin_get_push_system_status'),
+      client.rpc('superadmin_list_push_deliveries', { p_limit: 100 }),
+      client.rpc('superadmin_get_push_policy'),
+      client.rpc('superadmin_list_push_coverage', { p_filter: 'all', p_search: null, p_limit: 500 })
+    ]);
+    const errors = [];
+    if (statusResponse.error) { errors.push(statusResponse.error.message); state.pushSystemStatus = null; }
+    else state.pushSystemStatus = statusResponse.data || null;
+    if (deliveriesResponse.error) { errors.push(deliveriesResponse.error.message); state.pushDeliveries = []; }
+    else state.pushDeliveries = deliveriesResponse.data || [];
+    if (policyResponse.error) { errors.push(policyResponse.error.message); state.pushPolicy = null; }
+    else state.pushPolicy = policyResponse.data || null;
+    if (coverageResponse.error) { errors.push(coverageResponse.error.message); state.pushCoverage = []; }
+    else state.pushCoverage = coverageResponse.data || [];
+    state.pushCoverageError = coverageResponse.error?.message || null;
+    const combinedError = errors.join(' · ');
+    if (combinedError && !throwOnError) console.warn('No se pudo cargar toda la supervision Push:', combinedError);
+    if (throwOnError && combinedError) throw new Error(combinedError);
   }
 
   async function renderPushSubscriptionStatus() {
     if (!els['push-device-status']) return;
+    const device = state.pushDeviceState || await inspectPushDeviceState();
+    state.pushDeviceState = device;
+    const registeredCount = state.pushSubscriptions.filter(item => item.status === 'active').length;
+    const view = pushOnboardingPresentation();
+    const mandatory = Boolean(state.pushComplianceAvailable && state.pushCompliance?.enforcement_enabled);
+    const subscription = device.subscription;
 
-    if (!pushSupported()) {
-      els['push-device-status'].innerHTML = '<strong>No disponible en este navegador</strong><span>Usa Chrome, Edge, Firefox o Safari compatible. En algunos móviles se requiere instalar la app en pantalla de inicio.</span>';
-      els['enable-push-notifications']?.setAttribute('disabled', 'disabled');
-      els['test-push-notification']?.setAttribute('disabled', 'disabled');
-      els['disable-push-notifications']?.setAttribute('disabled', 'disabled');
+    els['enable-push-notifications']?.toggleAttribute('disabled', !pushSupported() || device.capability === 'permission_denied' || device.capability === 'installation_required');
+    els['test-push-notification']?.toggleAttribute('disabled', !subscription || !state.pushCompliance?.compliant);
+    els['disable-push-notifications']?.toggleAttribute('disabled', !subscription || mandatory);
+    if (els['disable-push-notifications']) els['disable-push-notifications'].title = mandatory ? 'La política del superadministrador exige mantener activo este dispositivo.' : '';
+
+    const detail = state.pushCompliance?.compliant
+      ? `Este navegador está registrado. Dispositivos activos en tu cuenta: ${registeredCount}.`
+      : view.detail;
+    els['push-device-status'].className = `push-status-box ${view.tone}`;
+    els['push-device-status'].innerHTML = `<strong>${escapeHtml(view.title)}</strong><span>${escapeHtml(detail)}</span>`;
+  }
+
+  function pushCoverageMatches(row) {
+    const filter = els['push-coverage-filter']?.value || 'all';
+    const search = String(els['push-coverage-search']?.value || '').trim().toLowerCase();
+    if (filter !== 'all' && row.coverage_state !== filter) return false;
+    if (!search) return true;
+    return [row.full_name, row.email, row.department, row.role].filter(Boolean).join(' ').toLowerCase().includes(search);
+  }
+
+  function renderPushCoverage() {
+    if (!canUseSuperadminOversight() || !els['push-coverage-list']) return;
+    const all = state.pushCoverage || [];
+    const rows = all.filter(pushCoverageMatches);
+    const active = all.filter(row => row.coverage_state === 'active').length;
+    const pending = all.filter(row => !['active','exempt'].includes(row.coverage_state)).length;
+    const denied = all.filter(row => row.coverage_state === 'denied').length;
+    const exempt = all.filter(row => row.coverage_state === 'exempt').length;
+    if (els['push-coverage-summary']) {
+      els['push-coverage-summary'].innerHTML = [
+        ['Personas activas', all.length], ['Listas para Push', active], ['Pendientes', pending], ['Rechazaron permiso', denied], ['Excepciones', exempt]
+      ].map(([label,value]) => `<article><span>${escapeHtml(label)}</span><strong>${Number(value)}</strong></article>`).join('');
+    }
+    if (state.pushCoverageError) {
+      els['push-coverage-list'].innerHTML = `<div class="empty danger">No se pudo cargar toda la cobertura: ${escapeHtml(state.pushCoverageError)}</div>`;
       return;
     }
-
-    const permission = Notification.permission;
-    const subscription = await currentPushSubscription().catch(() => null);
-    const registeredCount = state.pushSubscriptions.filter(item => item.status === 'active').length;
-
-    els['enable-push-notifications']?.toggleAttribute('disabled', permission === 'denied');
-    els['test-push-notification']?.toggleAttribute('disabled', !subscription);
-    els['disable-push-notifications']?.toggleAttribute('disabled', !subscription);
-
-    const label = permission === 'granted'
-      ? (subscription ? 'Activadas en este dispositivo' : 'Permiso concedido, falta registrar el dispositivo')
-      : permission === 'denied'
-        ? 'Bloqueadas por el navegador'
-        : 'Pendientes de activar';
-
-    const detail = permission === 'denied'
-      ? 'Abre los permisos del navegador para permitir notificaciones de Lumen Sign.'
-      : subscription
-        ? `Este navegador está registrado. Dispositivos activos en tu cuenta: ${registeredCount}.`
-        : 'Presiona Activar notificaciones para registrar este navegador.';
-
-    els['push-device-status'].innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(detail)}</span>`;
+    els['push-coverage-list'].innerHTML = rows.length ? `<div class="push-coverage-grid">${rows.map(row => {
+      const devices = Array.isArray(row.devices) ? row.devices : [];
+      const stateClass = ['active'].includes(row.coverage_state) ? 'success' : ['denied','error','unsupported'].includes(row.coverage_state) ? 'danger' : 'warning';
+      const deviceList = devices.length ? devices.map(device => `<li><strong>${escapeHtml(device.device_label || 'Dispositivo')}</strong><span>${escapeHtml(pushCapabilityLabel(device.capability_state))} · visto ${fmtDate(device.last_seen_at)}</span></li>`).join('') : '<li><span>Ningún dispositivo reportado.</span></li>';
+      const actions = row.coverage_state === 'exempt'
+        ? `<button class="secondary compact" data-revoke-push-exception="${row.user_id}">Quitar excepción</button>`
+        : row.coverage_state !== 'active' ? `<button class="secondary compact" data-set-push-exception="${row.user_id}" data-push-person="${escapeHtml(row.full_name || row.email)}">Excepción 7 días</button>` : '';
+      const test = Number(row.active_subscriptions || 0) > 0 ? `<button class="secondary compact" data-superadmin-push-test="${row.user_id}">Enviar prueba</button>` : '';
+      return `<article class="push-coverage-card">
+        <div class="push-coverage-card-head"><div><strong>${escapeHtml(row.full_name || row.email)}</strong><span>${escapeHtml(row.email || '')}${row.department ? ` · ${escapeHtml(row.department)}` : ''}</span></div><span class="pill ${stateClass}">${escapeHtml(pushCapabilityLabel(row.coverage_state))}</span></div>
+        <div class="push-coverage-facts"><span>Suscripciones activas <strong>${Number(row.active_subscriptions || 0)}</strong></span><span>Último Push <strong>${row.last_push_sent_at ? fmtDate(row.last_push_sent_at) : 'Sin entrega'}</strong></span></div>
+        <ul class="push-device-list">${deviceList}</ul>
+        ${row.exception_expires_at ? `<p class="push-exception-note">Excepción hasta ${fmtDate(row.exception_expires_at)} · ${escapeHtml(row.exception_reason || '')}</p>` : ''}
+        <div class="mini-actions">${test}${actions}</div>
+      </article>`;
+    }).join('')}</div>` : '<div class="empty">No hay personas que coincidan con el filtro.</div>';
   }
 
   function renderPushSystemStatus() {
-    if (!isAdmin() || !els['push-system-status']) return;
+    if (!canUseSuperadminOversight() || !els['push-system-status']) return;
     const item = state.pushSystemStatus;
-    if (!item) {
-      els['push-system-status'].innerHTML = '<div class="empty">Ejecuta la migración 30 y configura send-push para ver el estado.</div>';
-      if (els['notification-delivery-list']) els['notification-delivery-list'].innerHTML = '<div class="empty">Sin datos de push todavía.</div>';
-      return;
+    const policy = state.pushPolicy;
+    els['push-policy-form']?.querySelectorAll('input, select, button').forEach(control => { control.disabled = !policy; });
+    if (policy) {
+      if (els['push-policy-enforcement']) els['push-policy-enforcement'].checked = Boolean(policy.enforcement_enabled);
+      if (els['push-policy-warning']) els['push-policy-warning'].checked = Boolean(policy.send_deadline_warning);
+      if (els['push-policy-reminder']) els['push-policy-reminder'].checked = Boolean(policy.send_task_reminder);
+      if (els['push-policy-expired']) els['push-policy-expired'].checked = Boolean(policy.send_deadline_expired);
+      if (els['push-policy-stale-days']) els['push-policy-stale-days'].value = String(policy.stale_after_days || 45);
     }
-
-    const cards = [
-      ['Dispositivos activos', Number(item.active_devices || 0)],
-      ['Usuarios con push', Number(item.users_with_push || 0)],
-      ['Push pendientes', Number(item.pending || 0)],
-      ['Push fallidos', Number(item.failed || 0)],
-      ['Push enviados 24 h', Number(item.sent_24h || 0)]
-    ];
-    els['push-system-status'].innerHTML = cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
-
+    if (!item) {
+      els['push-system-status'].innerHTML = '<div class="empty">Ejecuta el SQL 33 de este paquete para activar la supervisión individual.</div>';
+    } else {
+      const cards = [
+        ['Personas activas', Number(item.active_users || 0)],
+        ['Personas verificadas', Number(item.compliant_users || 0)],
+        ['Dispositivos Push', Number(item.active_devices || 0)],
+        ['Push pendientes', Number(item.pending || 0)],
+        ['Push fallidos', Number(item.failed || 0)],
+        ['Push enviados 24 h', Number(item.sent_24h || 0)]
+      ];
+      els['push-system-status'].innerHTML = cards.map(([label,value]) => `<article class="email-status-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
+    }
+    renderPushCoverage();
     if (!els['notification-delivery-list']) return;
     const rows = state.pushDeliveries || [];
     els['notification-delivery-list'].innerHTML = rows.length
-      ? `<div class="table-wrap"><table><thead><tr><th>Canal</th><th>Usuario</th><th>Aviso</th><th>Estado</th><th>Intentos</th><th>Fecha</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.channel || 'push')}</td><td>${escapeHtml(row.recipient_email || '—')}</td><td><strong>${escapeHtml(row.title || row.subject || 'Aviso')}</strong><br><span class="muted small">${escapeHtml(row.document_title || '')}</span></td><td>${pill(row.status)}</td><td>${Number(row.attempts || 0)}</td><td>${fmtDate(row.sent_at || row.created_at)}</td><td>${row.notification_id ? `<button class="secondary" data-resend-notification="${row.notification_id}">Reenviar aviso</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
-      : '<div class="empty">Todavía no hay entregas push.</div>';
+      ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Persona</th><th>Aviso</th><th>Estado</th><th>Intentos</th><th></th></tr></thead><tbody>${rows.map(row => {
+        const mayResend = row.notification_id && !isDeadlineEmailKind(row.message_kind);
+        return `<tr><td>${fmtDate(row.sent_at || row.created_at)}</td><td>${row.recipient_name ? `<strong>${escapeHtml(row.recipient_name)}</strong><br>` : ''}<span class="muted small">${escapeHtml(row.recipient_email || '—')}</span></td><td><strong>${escapeHtml(row.title || 'Aviso')}</strong><br><span class="muted small">${escapeHtml(row.document_title || '')}</span></td><td>${pill(row.status)}${row.last_error ? `<br><span class="muted small">${escapeHtml(row.last_error)}</span>` : ''}</td><td>${Number(row.attempts || 0)}</td><td>${mayResend ? `<button class="secondary compact" data-resend-notification="${row.notification_id}">Reenviar</button>` : ''}</td></tr>`;
+      }).join('')}</tbody></table></div>`
+      : '<div class="empty">Todavía no hay entregas Push.</div>';
   }
 
   async function activatePushNotifications() {
-    await run(async () => {
+    const result = await run(async () => {
       if (!PUSH_VAPID_PUBLIC_KEY) throw new Error('Falta la llave pública VAPID.');
-      if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones push web.');
+      if (isIosDevice() && !isStandaloneApp()) throw new Error('En iPhone o iPad, primero agrega Lumen Sign a la pantalla de inicio y ábrelo desde el icono.');
+      if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones Push web.');
 
       const permission = await Notification.requestPermission();
-      if (permission !== 'granted') throw new Error('No se concedió permiso para mostrar notificaciones.');
+      if (permission !== 'granted') throw new Error('No se concedió permiso para mostrar notificaciones. Abre los permisos del navegador para corregirlo.');
 
       const registration = await getPushRegistration();
       let subscription = await registration.pushManager.getSubscription();
@@ -2188,24 +3048,19 @@
           applicationServerKey: urlBase64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)
         });
       }
-
-      const payload = subscription.toJSON();
-      const { error } = await client.rpc('upsert_push_subscription', {
-        p_endpoint: payload.endpoint,
-        p_p256dh: payload.keys?.p256dh || '',
-        p_auth: payload.keys?.auth || '',
-        p_user_agent: navigator.userAgent || '',
-        p_device_label: currentDeviceLabel()
-      });
-      if (error) throw error;
-
+      await registerExistingPushSubscription(subscription);
       await loadPushSubscriptions();
-      await renderPushSubscriptionStatus();
+      return true;
     }, 'Notificaciones activadas en este dispositivo.');
+    await enforcePushCompliance({ force: true, wasPrompted: true });
+    return Boolean(result);
   }
 
   async function disablePushNotifications() {
     await run(async () => {
+      if (state.pushComplianceAvailable && state.pushCompliance?.enforcement_enabled) {
+        throw new Error('La política del superadministrador exige mantener activas las notificaciones en este dispositivo.');
+      }
       const subscription = await currentPushSubscription();
       if (subscription) {
         const endpoint = subscription.endpoint;
@@ -2214,29 +3069,27 @@
         if (error) throw error;
       }
       await loadPushSubscriptions();
-      await renderPushSubscriptionStatus();
+      await enforcePushCompliance({ force: true });
     }, 'Notificaciones desactivadas en este dispositivo.');
   }
 
   async function processPushQueueNow(showSuccess = true, options = {}) {
     const { allowUnauthorized = false } = options;
     const { data, error } = await client.functions.invoke(PUSH_FUNCTION, {
-      body: {
-        source: 'frontend',
-        requested_at: new Date().toISOString(),
-        selfOnly: !isAdmin()
-      }
+      body: { source: 'frontend', requested_at: new Date().toISOString(), selfOnly: !isSuperAdmin() }
     });
     if (error) {
       if (allowUnauthorized) {
-        console.warn('No se pudo procesar push inmediatamente; el cron lo intentará automáticamente.', error);
+        console.warn('No se pudo procesar Push inmediatamente; el Cron lo intentará automáticamente.', error);
         return { ok: false, skipped: true, error: error.message || String(error) };
       }
       throw error;
     }
     if (showSuccess) toast(`Push procesado. Avisos enviados: ${Number(data?.processed || 0)}.`);
-    await loadPushSystemStatus();
-    renderPushSystemStatus();
+    if (canUseSuperadminOversight()) {
+      await loadPushSystemStatus();
+      renderPushSystemStatus();
+    }
     return data;
   }
 
@@ -2249,31 +3102,88 @@
       await processPushQueueNow(false, { allowUnauthorized: true });
       await loadNotifications();
       renderNotifications();
+      await enforcePushCompliance({ force: true });
     }, 'Prueba enviada. Si no aparece al instante, espera hasta un minuto.');
   }
 
+  async function updateSuperadminPushPolicy(event) {
+    event?.preventDefault();
+    if (!canUseSuperadminOversight()) throw new Error('Esta configuración es exclusiva del superadministrador activo.');
+    const { error } = await client.rpc('superadmin_update_push_policy', {
+      p_enforcement_enabled: Boolean(els['push-policy-enforcement']?.checked),
+      p_send_task_reminder: Boolean(els['push-policy-reminder']?.checked),
+      p_send_deadline_warning: Boolean(els['push-policy-warning']?.checked),
+      p_send_deadline_expired: Boolean(els['push-policy-expired']?.checked),
+      p_stale_after_days: Number(els['push-policy-stale-days']?.value || 45)
+    });
+    if (error) throw error;
+    await loadPushSystemStatus(true);
+    renderPushSystemStatus();
+  }
+
+  async function setPushException(userId, person) {
+    if (!canUseSuperadminOversight()) return;
+    const reason = window.prompt(`Motivo de la excepción técnica para ${person || 'esta persona'}:`, 'Equipo o navegador temporalmente no compatible');
+    if (!reason) return;
+    await run(async () => {
+      const { error } = await client.rpc('superadmin_set_push_exception', { p_user_id: userId, p_reason: reason.trim(), p_days: 7 });
+      if (error) throw error;
+      await loadPushSystemStatus(true);
+      renderPushSystemStatus();
+    }, 'Excepción técnica registrada por 7 días.');
+  }
+
+  async function revokePushException(userId) {
+    if (!canUseSuperadminOversight() || !window.confirm('¿Quitar esta excepción técnica? La persona deberá activar sus notificaciones al volver a entrar.')) return;
+    await run(async () => {
+      const { error } = await client.rpc('superadmin_revoke_push_exception', { p_user_id: userId });
+      if (error) throw error;
+      await loadPushSystemStatus(true);
+      renderPushSystemStatus();
+    }, 'Excepción retirada.');
+  }
+
+  async function superadminSendPushTest(userId) {
+    if (!canUseSuperadminOversight()) return;
+    await run(async () => {
+      const { error } = await client.rpc('superadmin_send_push_test', { p_user_id: userId });
+      if (error) throw error;
+      await processPushQueueNow(false);
+      await loadPushSystemStatus(true);
+      renderPushSystemStatus();
+    }, 'Prueba Push enviada a los dispositivos activos de la persona.');
+  }
+
   async function resendNotificationAllChannels(notificationId) {
+    if (!canUseSuperadminOversight()) return;
     await run(async () => {
       const { error } = await client.rpc('superadmin_resend_notification', {
-        p_notification_id: Number(notificationId),
-        p_channels: ['email','push']
+        p_notification_id: Number(notificationId), p_channels: ['email','push']
       });
       if (error) throw error;
       await processPushQueueNow(false);
       await Promise.all([loadEmailSystemStatus(), loadPushSystemStatus(), loadNotifications()]);
-      renderEmailSystemStatus();
-      renderPushSystemStatus();
-      renderNotifications();
-    }, 'Aviso reenviado por correo y push.');
+      renderEmailSystemStatus(); renderPushSystemStatus(); renderNotifications();
+    }, 'Aviso reenviado por correo y Push.');
   }
 
   function handleOpenIntentFromUrl() {
-    if (state.pushIntentHandled) return;
     const params = new URLSearchParams(location.search || '');
-    const open = params.get('open') || '';
+    let stored = '';
+    try { stored = sessionStorage.getItem(PUSH_OPEN_INTENT_KEY) || ''; }
+    catch {}
+    const fromUrl = params.get('open') || '';
+    const open = fromUrl || stored;
     if (!open) return;
-    state.pushIntentHandled = true;
-    const target = ['tasks','notifications','documents'].includes(open) ? open : 'tasks';
+    const target = ['tasks','notifications','documents','messages'].includes(open) ? open : 'tasks';
+    if (fromUrl) {
+      state.pushIntentHandled = true;
+      params.delete('open');
+      const cleanSearch = params.toString();
+      history.replaceState({}, document.title, `${location.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${location.hash || ''}`);
+    }
+    try { sessionStorage.removeItem(PUSH_OPEN_INTENT_KEY); }
+    catch {}
     setTimeout(() => navigate(target), 200);
   }
 
@@ -2399,8 +3309,9 @@
     renderNotifications();
     renderConversations();
     updateUnreadBadges();
-    if (isAdmin()) { renderAdminUsers(); renderPushSystemStatus(); renderTemplateList(); }
-    if (canUseSuperadminOversight()) { renderEmailSystemStatus(); renderAdminDashboard(); renderSuperadminProcessControl(); }
+    renderPushComplianceBanner();
+    if (isAdmin()) { renderAdminUsers(); renderTemplateList(); }
+    if (canUseSuperadminOversight()) { renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderSuperadminProcessControl(); renderUserCompliance(); }
     renderAccessRecoveryRequests();
   }
 
@@ -2566,6 +3477,7 @@
     if (kind === 'document_rejected') return '!';
     if (kind === 'document_completed') return '✓';
     if (kind === 'access_recovery') return '🔐';
+    if (kind === 'chat_message') return '💬';
     return '🔔';
   }
 
@@ -2581,6 +3493,8 @@
         </div>
         ${item.kind === 'access_recovery' && isSuperAdmin()
           ? `<button class="primary" data-open-access-recovery="${item.id}">Atender solicitud</button>`
+          : item.kind === 'chat_message' && item.conversation_id
+            ? `<button class="secondary" data-open-chat-notification="${item.id}" data-notification-conversation="${item.conversation_id}">Abrir conversación</button>`
           : item.document_id
             ? `<button class="secondary" data-open-notification="${item.id}" data-notification-document="${item.document_id}">Abrir documento</button>`
             : `<button class="secondary" data-read-notification="${item.id}">${item.read_at ? 'Leída' : 'Marcar leída'}</button>`}
@@ -2617,8 +3531,12 @@
 
   async function openConversation(id) {
     state.activeConversationId = id;
+    state.activeConversationMembers = [];
+    els['chat-header'].innerHTML = '<div><h3>Abriendo conversación…</h3><p class="muted small">Cargando participantes y mensajes.</p></div>';
+    els['chat-form'].classList.add('hidden');
+    els['chat-messages'].innerHTML = '<div class="empty">Cargando conversación…</div>';
     if (state.chatChannel) { await client.removeChannel(state.chatChannel); state.chatChannel = null; }
-    await run(async () => {
+    const opened = await run(async () => {
       const [membersRes, messagesRes] = await Promise.all([
         client.rpc('get_conversation_members', { p_conversation_id: id }),
         client.rpc('get_conversation_messages', { p_conversation_id: id, p_limit: 300 })
@@ -2634,7 +3552,17 @@
       if (isMember) await client.rpc('mark_conversation_read', { p_conversation_id: id });
       await loadConversations();
       renderConversations();
+      return true;
     });
+    if (!opened) {
+      state.activeConversationId = null;
+      state.activeConversationMembers = [];
+      els['chat-header'].innerHTML = '<div><h3>No se pudo abrir la conversación</h3><p class="muted small">Selecciona otra conversación o intenta actualizar.</p></div>';
+      els['chat-form'].classList.add('hidden');
+      els['chat-messages'].innerHTML = '<div class="empty">No hay mensajes disponibles.</div>';
+      renderConversations();
+      return false;
+    }
     state.chatChannel = client.channel(`conversation:${id}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `conversation_id=eq.${id}` }, async () => {
         const { data, error } = await client.rpc('get_conversation_messages', { p_conversation_id: id, p_limit: 300 });
@@ -2645,6 +3573,7 @@
         }
       })
       .subscribe();
+    return true;
   }
 
   function renderChatMessages(messages) {
@@ -2823,7 +3752,7 @@
     if (section === 'messages') { loadConversations().then(renderConversations).catch(error => toast(error.message, true)); }
     if (section === 'notifications') { loadNotifications().then(renderNotifications).catch(error => toast(error.message, true)); }
     if (section === 'history') renderDocumentHistory();
-    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadTemplates(), loadAccessRecoveryRequests()]).then(() => { renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderSuperadminProcessControl(); renderTemplateList(); renderAccessRecoveryRequests(); }).catch(error => toast(error.message, true)); }
+    if (section === 'admin' && isAdmin()) { Promise.all([loadEmailSystemStatus(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadUserCompliance(), loadTemplates(), loadAccessRecoveryRequests()]).then(() => { renderEmailSystemStatus(); renderPushSystemStatus(); renderAdminDashboard(); renderSuperadminProcessControl(); renderUserCompliance(); renderTemplateList(); renderAccessRecoveryRequests(); }).catch(error => toast(error.message, true)); }
     scrollActiveViewToTop({ focusHeading: true });
   }
 
@@ -3678,7 +4607,7 @@
   }
 
   function eventLabel(action) {
-    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados',routing_configured:'Orden del proceso configurado',document_paused:'Proceso pausado',document_resumed:'Proceso reanudado',document_cancelled:'Proceso cancelado',deadline_extended:'Fecha límite extendida',participant_reassigned:'Responsable reasignado',correction_draft_created:'Corrección creada',template_created:'Plantilla creada',evidence_package_generated:'Paquete de evidencias generado',document_viewed:'PDF visualizado',document_preparation_viewed:'PDF abierto para preparación',document_signing_viewed:'PDF abierto para firma',document_downloaded:'Documento descargado',document_access_failed:'Acceso a documento fallido',review_comment_added:'Comentario de revisión agregado',review_change_requested:'Cambios solicitados',review_comment_resolved:'Comentario de revisión resuelto',review_ok_registered:'Visto bueno de revisión registrado',review_deadline_processed:'Revisión cerrada por vencimiento',collaborative_review_configured:'Revisión colaborativa configurada',collaborative_review_restarted:'Revisión reiniciada por nueva versión',privacy_notice_accepted:'Aviso de privacidad aceptado'}[action] || action);
+    return ({document_created:'Documento creado',primary_file_attached:'Archivo principal cargado',attachment_added:'Anexo agregado',flow_updated:'Flujo actualizado',document_submitted:'Documento enviado',document_approved:'Documento aprobado',document_rejected:'Documento rechazado',document_signed:'Documento firmado',document_completed:'Flujo completado',signature_fields_updated:'Espacios de firma preparados',delivery_settings_updated:'Recordatorios configurados',routing_configured:'Orden del proceso configurado',document_paused:'Proceso pausado',document_resumed:'Proceso reanudado',document_cancelled:'Proceso cancelado',deadline_extended:'Fecha límite extendida',participant_reassigned:'Responsable reasignado',correction_draft_created:'Corrección creada',template_created:'Plantilla creada',evidence_package_generated:'Paquete de evidencias generado',document_viewed:'PDF visualizado',document_preparation_viewed:'PDF abierto para preparación',document_signing_viewed:'PDF abierto para firma',document_downloaded:'Documento descargado',document_access_failed:'Acceso a documento fallido',review_comment_added:'Comentario de revisión agregado',review_change_requested:'Cambios solicitados',review_comment_resolved:'Comentario de revisión resuelto',review_ok_registered:'Visto bueno de revisión registrado',review_deadline_processed:'Revisión cerrada por vencimiento',collaborative_review_configured:'Revisión colaborativa configurada',collaborative_review_restarted:'Revisión reiniciada por nueva versión',document_conversation_message:'Comentario agregado en la conversación',privacy_notice_accepted:'Aviso de privacidad aceptado'}[action] || action);
   }
 
   async function pauseDocument(id) {
@@ -4608,7 +5537,11 @@
         password
       });
       if (error) {
-        showSignConfirmError('password', 'La contraseña no es correcta. Vuelve a escribirla.');
+        if (isInvalidCredentialsError(error)) {
+          showSignConfirmError('password', 'La contraseña no es correcta. Vuelve a escribirla.');
+        } else {
+          showSignConfirmError('general', friendlyErrorMessage(error, 'No fue posible confirmar tu identidad. Intenta nuevamente.'));
+        }
         return;
       }
       state.session = data?.session || state.session;
@@ -4787,7 +5720,7 @@
   }
 
   async function refreshData() {
-    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadAccessRecoveryRequests()]);
+    await Promise.all([loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadDocuments(), loadMyParticipation(), loadDocumentHistory(), loadTasks(), loadSignatures(), loadAppliedSignatures(), loadNotifications(), loadConversations(), loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadUserCompliance(), loadAccessRecoveryRequests()]);
     renderAll();
   }
 
@@ -5143,10 +6076,7 @@
   }
 
   async function logoutFromSecurityGate() {
-    clearProfileDraft();
-    clearForcePasswordDialog();
-    clearMfaDialogs();
-    await client.auth.signOut();
+    await endSessionSecurely({ manual: true });
   }
 
   async function markPasswordChanged() {
@@ -5348,10 +6278,23 @@
     qsa('[data-auth-tab]').forEach(btn => btn.addEventListener('click', () => switchAuthTab(btn.dataset.authTab)));
     els['login-form'].addEventListener('submit', async e => {
       e.preventDefault();
-      await run(async () => {
+      clearLoginConnectivityStatus();
+      writeIdleActivity(Date.now());
+      try {
+        setBusy(true);
         const { error } = await client.auth.signInWithPassword({ email: byId('login-email').value.trim(), password: byId('login-password').value });
         if (error) throw error;
-      });
+      } catch (error) {
+        console.error(error);
+        if (isConnectivityError(error)) {
+          await showLoginConnectivityDiagnosis();
+          toast('No se comprobó tu contraseña. Revisa el diagnóstico debajo de Ingresar.', true);
+        } else {
+          toast(friendlyErrorMessage(error), true);
+        }
+      } finally {
+        setBusy(false);
+      }
     });
     if (els['register-form']) {
       els['register-form'].addEventListener('submit', e => {
@@ -5390,6 +6333,15 @@
     els['mfa-setup-code']?.addEventListener('input', () => clearMfaInlineError('setup'));
     els['mfa-verify-form']?.addEventListener('submit', completeMfaVerification);
     els['mfa-verify-dialog']?.addEventListener('cancel', event => event.preventDefault());
+    els['session-timeout-dialog']?.addEventListener('cancel', event => event.preventDefault());
+    els['session-timeout-continue']?.addEventListener('click', continueIdleSession);
+    els['session-timeout-logout']?.addEventListener('click', async () => {
+      await endSessionSecurely({ manual: true });
+    });
+    els['login-connectivity-copy']?.addEventListener('click', copyLoginConnectivityDiagnosis);
+    els['push-onboarding-dialog']?.addEventListener('cancel', event => {
+      if (state.pushComplianceGateActive) event.preventDefault();
+    });
     els['sign-confirm-dialog']?.addEventListener('cancel', event => {
       if (state.pendingSignConfirmation) {
         event.preventDefault();
@@ -5399,7 +6351,21 @@
     els['mfa-verify-logout']?.addEventListener('click', logoutFromSecurityGate);
     els['mfa-verify-retry']?.addEventListener('click', retryMfaChallenge);
     els['mfa-verify-code']?.addEventListener('input', () => clearMfaInlineError('verify'));
-    els['logout-button'].addEventListener('click', async () => { clearProfileDraft(); clearMfaDialogs(); await client.auth.signOut(); });
+    els['push-onboarding-activate']?.addEventListener('click', activatePushNotifications);
+    els['push-onboarding-check']?.addEventListener('click', () => run(() => enforcePushCompliance({ force: true }), 'Estado de notificaciones comprobado.'));
+    els['push-onboarding-admin-bypass']?.addEventListener('click', () => {
+      if (!isSuperAdmin()) return;
+      state.pushAdminBypass = true;
+      closePushComplianceGate();
+      renderPushComplianceBanner();
+      toast('Entraste para administrar. Este dispositivo seguirá marcado como pendiente.');
+    });
+    els['push-onboarding-logout']?.addEventListener('click', logoutFromSecurityGate);
+    els['push-compliance-banner-action']?.addEventListener('click', () => {
+      state.pushAdminBypass = false;
+      enforcePushCompliance({ force: true });
+    });
+    els['logout-button'].addEventListener('click', () => endSessionSecurely({ manual: true }));
     els['main-nav'].addEventListener('click', e => { const b = e.target.closest('[data-section]'); if (b && !b.disabled) navigate(b.dataset.section); });
     els['menu-button'].setAttribute('aria-expanded', 'false');
     els['menu-button'].addEventListener('click', toggleMobileMenu);
@@ -5411,6 +6377,7 @@
         els['force-password-dialog']?.open
         || els['mfa-setup-dialog']?.open
         || els['mfa-verify-dialog']?.open
+        || (els['push-onboarding-dialog']?.open && state.pushComplianceGateActive)
         || (els['sign-confirm-dialog']?.open && state.pendingSignConfirmation)
       );
 
@@ -5503,10 +6470,18 @@
     els['test-push-notification']?.addEventListener('click', sendTestPushNotification);
     els['refresh-notification-evidence']?.addEventListener('click', async () => { await run(async () => { await loadPushSystemStatus(); renderPushSystemStatus(); }, 'Evidencia actualizada.'); });
     els['process-push-now']?.addEventListener('click', async () => { await run(() => processPushQueueNow(false), 'Cola push procesada.'); });
+    els['push-policy-form']?.addEventListener('submit', event => run(() => updateSuperadminPushPolicy(event), 'Política Push actualizada.'));
+    els['refresh-push-coverage']?.addEventListener('click', async () => { await run(async () => { await loadPushSystemStatus(true); renderPushSystemStatus(); }, 'Cobertura Push actualizada.'); });
+    els['push-coverage-filter']?.addEventListener('change', renderPushCoverage);
+    els['push-coverage-search']?.addEventListener('input', renderPushCoverage);
     if (els['refresh-admin-dashboard']) els['refresh-admin-dashboard'].addEventListener('click', async () => { await run(async () => { await loadAdminDashboard(); renderAdminDashboard(); }, 'Indicadores actualizados.'); });
     if (els['refresh-process-control']) els['refresh-process-control'].addEventListener('click', async () => { await run(() => loadSuperadminProcessControl(true).finally(() => renderSuperadminProcessControl()), 'Control de procesos actualizado.'); });
     els['process-control-filter']?.addEventListener('change', renderSuperadminProcessControl);
     els['process-control-search']?.addEventListener('input', renderSuperadminProcessControl);
+    els['refresh-user-compliance']?.addEventListener('click', async () => { await run(() => loadUserCompliance(true).finally(() => renderUserCompliance()), 'Cumplimiento por persona actualizado.'); });
+    els['user-compliance-filter']?.addEventListener('change', renderUserCompliance);
+    els['user-compliance-search']?.addEventListener('input', renderUserCompliance);
+    els['download-user-compliance']?.addEventListener('click', downloadUserComplianceCsv);
     if (els['refresh-templates']) els['refresh-templates'].addEventListener('click', async () => { await run(async () => { await loadTemplates(); renderTemplateList(); }, 'Plantillas actualizadas.'); });
 
     document.addEventListener('submit', async event => {
@@ -5517,6 +6492,14 @@
     });
 
     document.addEventListener('click', async e => {
+      const setPushExceptionButton = e.target.closest('[data-set-push-exception]');
+      if (setPushExceptionButton) {
+        return setPushException(setPushExceptionButton.dataset.setPushException, setPushExceptionButton.dataset.pushPerson);
+      }
+      const revokePushExceptionButton = e.target.closest('[data-revoke-push-exception]');
+      if (revokePushExceptionButton) return revokePushException(revokePushExceptionButton.dataset.revokePushException);
+      const superadminPushTestButton = e.target.closest('[data-superadmin-push-test]');
+      if (superadminPushTestButton) return superadminSendPushTest(superadminPushTestButton.dataset.superadminPushTest);
       const mobileProcess = e.target.closest('[data-toggle-mobile-process]');
       if (mobileProcess) {
         e.preventDefault();
@@ -5544,6 +6527,17 @@
         return;
       }
       const conversation = e.target.closest('[data-open-conversation]'); if (conversation) return openConversation(conversation.dataset.openConversation);
+      const chatNotification = e.target.closest('[data-open-chat-notification]'); if (chatNotification) {
+        await loadConversations();
+        renderConversations(); navigate('messages');
+        const opened = await openConversation(chatNotification.dataset.notificationConversation);
+        if (!opened) return;
+        const { error } = await client.rpc('mark_notification_read', { p_notification_id: Number(chatNotification.dataset.openChatNotification) });
+        if (error) throw error;
+        await loadNotifications();
+        renderNotifications();
+        return;
+      }
       const openNotification = e.target.closest('[data-open-notification]'); if (openNotification) {
         await client.rpc('mark_notification_read', { p_notification_id: Number(openNotification.dataset.openNotification) });
         await loadNotifications(); renderNotifications();
@@ -5600,11 +6594,46 @@
       if (state.preview && els['preview-dialog']?.open) renderPreviewPage();
       if (state.signing && els['sign-dialog']?.open) renderSigningPages(false);
     });
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && state.session) { queueLiveRefresh('visibility'); renderPushSubscriptionStatus(); } });
+    ['pointerdown','keydown','touchstart','scroll'].forEach(eventName => {
+      document.addEventListener(eventName, () => recordSessionActivity(false), { passive: true });
+    });
+    window.addEventListener('storage', event => {
+      if (event.key === IDLE_ACTIVITY_STORAGE_KEY && state.session) {
+        checkIdleSession().catch(error => console.warn('No se pudo sincronizar la actividad entre pestañas.', error));
+      }
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && state.session) {
+        checkIdleSession().then(() => {
+          if (!state.session) return;
+          queueLiveRefresh('visibility');
+          enforcePushCompliance({ force: true }).catch(error => console.warn('No se pudo comprobar Push al volver a la pestaña.', error));
+        }).catch(error => console.warn('No se pudo comprobar la sesión al volver a la pestaña.', error));
+      }
+    });
     window.addEventListener('online', () => { setLiveStatus('syncing'); queueLiveRefresh('online'); });
     window.addEventListener('offline', () => setLiveStatus('disconnected'));
     navigator.serviceWorker?.addEventListener?.('message', event => {
-      if (event.data?.type === 'LUMEN_SIGN_PUSH_CLICK') navigate('tasks');
+      if (event.data?.type === 'LUMEN_SIGN_PUSH_CLICK') {
+        try {
+          const target = new URL(event.data.url || './?open=tasks', location.href).searchParams.get('open') || 'tasks';
+          const safeTarget = ['tasks','notifications','documents','messages'].includes(target) ? target : 'tasks';
+          if (state.session && isActive()) navigate(safeTarget);
+          else {
+            try { sessionStorage.setItem(PUSH_OPEN_INTENT_KEY, safeTarget); }
+            catch {}
+            showAuth();
+          }
+        } catch {
+          try { sessionStorage.setItem(PUSH_OPEN_INTENT_KEY, 'tasks'); }
+          catch {}
+          if (state.session && isActive()) navigate('tasks');
+          else showAuth();
+        }
+      }
+      if (event.data?.type === 'LUMEN_SIGN_PUSH_SUBSCRIPTION_CHANGED') {
+        enforcePushCompliance({ force: true }).catch(error => console.warn('No se pudo renovar la suscripción Push.', error));
+      }
     });
     window.addEventListener('beforeunload', e => { if(state.profileDirty){e.preventDefault();e.returnValue='';} });
   }
