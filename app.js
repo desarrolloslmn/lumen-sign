@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.9.1-permisos-administrador';
+  const APP_VERSION = '8.9.2-excepcion-mfa-vanessa';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -1164,6 +1164,29 @@
     els['sign-confirm-error'] = box;
   }
 
+  function isMfaExempt() {
+    return state.profile?.mfa_exempt === true;
+  }
+
+  function syncMfaExceptionUi() {
+    const exempt = isMfaExempt();
+    const mfaLabel = byId('sign-confirm-mfa-label');
+    const mfaInput = byId('sign-confirm-mfa-code');
+    const note = byId('sign-confirm-security-note');
+
+    mfaLabel?.classList.toggle('hidden', exempt);
+    if (mfaInput) {
+      mfaInput.required = !exempt;
+      mfaInput.disabled = exempt;
+      if (exempt) mfaInput.value = '';
+    }
+    if (note) {
+      note.innerHTML = exempt
+        ? '<strong>Confirmación de identidad:</strong> tu firma visual registra la decisión y tu contraseña actual confirma tu identidad. Esta cuenta tiene una excepción de autenticador autorizada y registrada.'
+        : '<strong>Dos evidencias distintas:</strong> tu firma visual registra la decisión; la contraseña y el código MFA confirman tu identidad. El cierre automático por inactividad reduce el riesgo de dejar la cuenta abierta.';
+    }
+  }
+
   function clearSignConfirmError() {
     const box = byId('sign-confirm-error');
     if (box) {
@@ -1204,6 +1227,7 @@
 
   function resetSignConfirmForm() {
     ensureSignConfirmSecurityFields();
+    syncMfaExceptionUi();
     byId('sign-confirm-form')?.reset();
     clearSignConfirmError();
   }
@@ -2568,6 +2592,8 @@
     if (els['save-template-button']) els['save-template-button'].classList.toggle('hidden', !(isAdmin() || isContracts()));
     fillProfileForm(forceProfileForm);
     ensureMobileBottomNavigation();
+    ensureSignConfirmSecurityFields();
+    syncMfaExceptionUi();
   }
 
 
@@ -5511,16 +5537,18 @@
   async function confirmVisualSigning(event) {
     event.preventDefault();
     ensureSignConfirmSecurityFields();
+    syncMfaExceptionUi();
     clearSignConfirmError();
 
     const password = byId('sign-confirm-password')?.value || '';
     const code = normalizeMfaCode(byId('sign-confirm-mfa-code')?.value);
+    const requiresMfa = !isMfaExempt();
 
     if (!password) {
       showSignConfirmError('password', 'Escribe tu contraseña actual para confirmar la firma.');
       return;
     }
-    if (!/^\d{6}$/.test(code)) {
+    if (requiresMfa && !/^\d{6}$/.test(code)) {
       showSignConfirmError('mfa', 'Escribe el código actual de 6 dígitos de tu app autenticadora.');
       return;
     }
@@ -5552,12 +5580,14 @@
       }
       state.session = data?.session || state.session;
 
-      try {
-        await verifyMfaForSigning(code);
-      } catch (mfaError) {
-        console.error(mfaError);
-        showSignConfirmError('mfa', mfaFriendlyError(mfaError));
-        return;
+      if (requiresMfa) {
+        try {
+          await verifyMfaForSigning(code);
+        } catch (mfaError) {
+          console.error(mfaError);
+          showSignConfirmError('mfa', mfaFriendlyError(mfaError));
+          return;
+        }
       }
 
       const privacyResult = await client.rpc('record_privacy_acceptance', {
@@ -5861,6 +5891,11 @@
   async function prepareForcedPasswordChange() {
     if (!state.profile?.must_change_password) return true;
 
+    if (isMfaExempt()) {
+      showForcePasswordDialog();
+      return true;
+    }
+
     const { data, error } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
     if (error) throw error;
 
@@ -5894,6 +5929,11 @@
 
   async function enforceMfaForAll() {
     if (!state.session || state.passwordResetActive) return true;
+
+    if (isMfaExempt()) {
+      clearMfaDialogs();
+      return true;
+    }
 
     const { data, error } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
     if (error) throw error;
@@ -6151,21 +6191,23 @@
 
       setBusy(true);
 
-      // Si existe MFA verificado, Supabase exige AAL2 antes de permitir
-      // la modificación de la contraseña.
-      const { data: aalData, error: aalError } =
-        await client.auth.mfa.getAuthenticatorAssuranceLevel();
-      if (aalError) throw aalError;
+      if (!isMfaExempt()) {
+        // Si existe MFA verificado, Supabase exige AAL2 antes de permitir
+        // la modificación de la contraseña.
+        const { data: aalData, error: aalError } =
+          await client.auth.mfa.getAuthenticatorAssuranceLevel();
+        if (aalError) throw aalError;
 
-      const verifiedFactors = await getVerifiedTotpFactors();
-      if (verifiedFactors.length > 0 && aalData?.currentLevel !== 'aal2') {
-        clearForcePasswordDialog();
-        await startMfaVerification(verifiedFactors[0].id, 'password-change');
-        showMfaInlineError(
-          'verify',
-          'Confirma primero el código de tu autenticador. Después volverás al cambio de contraseña.'
-        );
-        return;
+        const verifiedFactors = await getVerifiedTotpFactors();
+        if (verifiedFactors.length > 0 && aalData?.currentLevel !== 'aal2') {
+          clearForcePasswordDialog();
+          await startMfaVerification(verifiedFactors[0].id, 'password-change');
+          showMfaInlineError(
+            'verify',
+            'Confirma primero el código de tu autenticador. Después volverás al cambio de contraseña.'
+          );
+          return;
+        }
       }
 
       // La regla "Require current password when changing password" exige
