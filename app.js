@@ -18,13 +18,15 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.9.2-excepcion-mfa-vanessa';
+  const APP_VERSION = '8.9.3-recuperacion-push-estable';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
   const DOCUMENT_ACCESS_FUNCTION = 'document-access';
   const PUSH_FUNCTION = 'send-push';
   const PUSH_VAPID_PUBLIC_KEY = cfg.pushVapidPublicKey || 'BC9n68QB-ZFiUFqnbK52EHE_JJb213MmlF0t8GN3zKTs5m_uCQTxvQVmOvjj9ePSyeDBgAgeGqXdS0AQaZHsbVk';
+  const INITIAL_LOAD_TIMEOUT_MS = 15000;
+  const PUSH_ACTION_TIMEOUT_MS = 25000;
   const boundedInteger = (value, fallback, minimum, maximum) => {
     const parsed = Number(value);
     return Number.isFinite(parsed)
@@ -66,7 +68,7 @@
     pushSubscriptions: [], pushSystemStatus: null, pushDeliveries: [], pushIntentHandled: false,
     pushCompliance: null, pushComplianceAvailable: false, pushComplianceGateActive: false,
     pushAdminBypass: false, pushDeviceState: null, pushPolicy: null, pushCoverage: [],
-    pushCoverageError: null, pushLastComplianceSyncAt: 0,
+    pushCoverageError: null, pushLastComplianceSyncAt: 0, pushActionBusy: false, pushLastActionError: '',
     userCompliance: [], userComplianceError: null,
     idleTimer: null, idleWarningActive: false, idleSigningOut: false, idleLastWriteAt: 0,
     templates: [], adminDashboard: null, pendingSignConfirmation: null, selectedTemplateFields: [], forcePasswordChangeActive: false, mfaRequiredActive: false, signReauthActive: false, reviewDeadlineProcessedAt: 0, accessRecoveryRequests: [], securityGateLocked: false, mfa: { factorId: null, challengeId: null, mode: null, enrollment: null }
@@ -204,6 +206,7 @@
     ensurePrivateAccessMeta();
     ensurePrivateLoginNotice();
     ensureMfaMobileSetupUi();
+    configureSecurityGateButtons();
   }
 
   function errorText(error) {
@@ -1384,6 +1387,51 @@
     }
   }
 
+  function withTimeout(promise, timeoutMs, message) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message || 'La operación tardó demasiado. Intenta nuevamente.');
+        error.name = 'TimeoutError';
+        reject(error);
+      }, timeoutMs);
+    });
+    return Promise.race([Promise.resolve(promise), timeout])
+      .finally(() => clearTimeout(timer));
+  }
+
+  async function enforcePushComplianceSafely(options = {}) {
+    try {
+      return await withTimeout(
+        enforcePushCompliance(options),
+        PUSH_ACTION_TIMEOUT_MS,
+        'Lumen Sign tardó demasiado en comprobar las notificaciones de este dispositivo.'
+      );
+    } catch (error) {
+      console.error('La comprobación Push no terminó.', error);
+      const message = await rememberPushActivationFailure(error, Boolean(options.wasPrompted));
+      toast(message, true);
+      openPushComplianceGate();
+      return null;
+    }
+  }
+
+  function configureSecurityGateButtons() {
+    [
+      'force-password-logout',
+      'mfa-setup-logout',
+      'mfa-verify-logout',
+      'push-onboarding-activate',
+      'push-onboarding-check',
+      'push-onboarding-logout'
+    ].forEach(id => {
+      const button = els[id] || byId(id);
+      if (!button) return;
+      button.dataset.keepEnabled = 'true';
+      button.disabled = false;
+    });
+  }
+
   function setBusy(busy) {
     qsa('button').forEach(button => {
       if (button.dataset.keepEnabled === 'true') return;
@@ -1740,17 +1788,31 @@
 
   async function loadProtectedAppData(expectedUserId = state.session?.user?.id, expectedGeneration = state.sessionGeneration) {
     if (!state.session || !state.profile) return;
-    await Promise.all([
-      loadProfiles(), loadWorkflowCandidates(), loadTemplates(), loadSignatures(), loadDocuments(),
-      loadTasks(), loadAppliedSignatures(), loadNotifications(), loadConversations(),
-      loadEmailSystemStatus(), loadPushSubscriptions(), loadPushSystemStatus(), loadAdminDashboard(), loadSuperadminProcessControl(), loadUserCompliance(), loadAccessRecoveryRequests()
-    ]);
+    const loaders = [
+      ['perfiles', loadProfiles], ['participantes', loadWorkflowCandidates], ['plantillas', loadTemplates],
+      ['firmas', loadSignatures], ['documentos', loadDocuments], ['tareas', loadTasks],
+      ['firmas aplicadas', loadAppliedSignatures], ['notificaciones', loadNotifications],
+      ['conversaciones', loadConversations], ['correo', loadEmailSystemStatus],
+      ['dispositivos Push', loadPushSubscriptions], ['estado Push', loadPushSystemStatus],
+      ['tablero', loadAdminDashboard], ['control de procesos', loadSuperadminProcessControl],
+      ['cumplimiento', loadUserCompliance], ['recuperación de acceso', loadAccessRecoveryRequests]
+    ];
+    const results = await Promise.allSettled(loaders.map(([label, loader]) => withTimeout(
+      Promise.resolve().then(loader),
+      INITIAL_LOAD_TIMEOUT_MS,
+      `La carga de ${label} tardó demasiado.`
+    )));
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.warn(`La carga inicial de ${loaders[index][0]} no terminó a tiempo.`, result.reason);
+      }
+    });
     if (state.sessionGeneration !== expectedGeneration || state.session?.user?.id !== expectedUserId) return;
     renderAll();
     handleOpenIntentFromUrl();
     startLiveSync();
     state.loadedUserId = state.session.user.id;
-    if (isActive()) await enforcePushCompliance({ force: true });
+    if (isActive()) await enforcePushComplianceSafely({ force: true });
     else setSecurityGateLocked(false);
   }
 
@@ -1765,7 +1827,7 @@
       state.profile = null; state.loadedUserId = null; state.profiles = []; state.documents = [];
       state.tasks = []; state.signatures = []; state.appliedSignatures = []; state.notifications = []; state.conversations = []; state.activeConversationId = null; state.accessRecoveryRequests = [];
       state.adminDashboard = null; state.superadminProcesses = []; state.superadminProcessError = null; state.superadminEmailControls = null; state.emailSystemStatus = null; state.emailSystemError = null; state.emailDeliveries = [];
-      state.pushSubscriptions = []; state.pushSystemStatus = null; state.pushDeliveries = []; state.pushCompliance = null; state.pushComplianceAvailable = false; state.pushComplianceGateActive = false; state.pushAdminBypass = false; state.pushDeviceState = null; state.pushPolicy = null; state.pushCoverage = []; state.pushCoverageError = null; state.pushLastComplianceSyncAt = 0;
+      state.pushSubscriptions = []; state.pushSystemStatus = null; state.pushDeliveries = []; state.pushCompliance = null; state.pushComplianceAvailable = false; state.pushComplianceGateActive = false; state.pushAdminBypass = false; state.pushDeviceState = null; state.pushPolicy = null; state.pushCoverage = []; state.pushCoverageError = null; state.pushLastComplianceSyncAt = 0; state.pushActionBusy = false; state.pushLastActionError = '';
       state.userCompliance = []; state.userComplianceError = null;
       state.pushIntentHandled = false;
       clearForcePasswordDialog(); clearMfaDialogs(); stopLiveSync(); stopIdleSessionGuard();
@@ -1788,7 +1850,7 @@
       if (!(await enforceMfaForAll())) return;
       if (isActive()) {
         setSecurityGateLocked(true);
-        await enforcePushCompliance({ force: false });
+        await enforcePushComplianceSafely({ force: false });
       } else {
         setSecurityGateLocked(false);
       }
@@ -2771,6 +2833,7 @@
       state.pushCompliance = compliance;
       state.pushComplianceAvailable = true;
       state.pushLastComplianceSyncAt = Date.now();
+      if (compliance.compliant) state.pushLastActionError = '';
       return compliance;
     } catch (error) {
       if (missingPushComplianceRpc(error)) {
@@ -2839,9 +2902,9 @@
     };
     if (['network_error','registration_error'].includes(device.capability)) return {
       tone: 'danger', title: 'No se pudo registrar este dispositivo',
-      detail: 'Revisa la conexión o intenta desde otra red. Tu cuenta y tus tareas no fueron modificadas.',
+      detail: state.pushLastActionError || 'Revisa la conexión o intenta desde otra red. Tu cuenta y tus tareas no fueron modificadas.',
       steps: ['Comprueba que el equipo tenga Internet.', 'Si estás en una red corporativa, prueba con datos móviles.', 'Vuelve a comprobar el registro.'],
-      canActivate: false, canCheck: true
+      canActivate: device.permission === 'granted', canCheck: true
     };
     return {
       tone: 'info', title: device.capability === 'subscription_missing' ? 'Completa el registro de este dispositivo' : 'Permite las notificaciones',
@@ -2865,7 +2928,15 @@
     }
     els['push-onboarding-activate']?.classList.toggle('hidden', !view.canActivate);
     els['push-onboarding-check']?.classList.toggle('hidden', !view.canCheck);
-    if (els['push-onboarding-check']) els['push-onboarding-check'].textContent = view.checkLabel || 'Ya lo corregí, comprobar';
+    if (els['push-onboarding-activate']) {
+      els['push-onboarding-activate'].disabled = state.pushActionBusy;
+      els['push-onboarding-activate'].textContent = state.pushActionBusy ? 'Activando…' : 'Activar notificaciones';
+    }
+    if (els['push-onboarding-check']) {
+      els['push-onboarding-check'].disabled = state.pushActionBusy;
+      els['push-onboarding-check'].textContent = state.pushActionBusy ? 'Comprobando…' : (view.checkLabel || 'Ya lo corregí, comprobar');
+    }
+    if (els['push-onboarding-logout']) els['push-onboarding-logout'].disabled = false;
     els['push-onboarding-admin-bypass']?.classList.toggle('hidden', !isSuperAdmin() || state.pushAdminBypass || state.pushCompliance?.compliant || state.pushCompliance?.exempt);
   }
 
@@ -2898,6 +2969,7 @@
 
   function openPushComplianceGate() {
     state.pushComplianceGateActive = true;
+    configureSecurityGateButtons();
     renderPushOnboarding();
     setSecurityGateLocked(true);
     if (els['push-onboarding-dialog'] && !els['push-onboarding-dialog'].open) {
@@ -3059,29 +3131,167 @@
       : '<div class="empty">Todavía no hay entregas Push.</div>';
   }
 
+  function pushActivationFriendlyError(error) {
+    const text = errorText(error);
+    const name = String(error?.name || '').toLowerCase();
+    const permission = 'Notification' in window ? Notification.permission : 'unsupported';
+    if (permission === 'denied' || name.includes('notallowederror') || text.includes('permission denied')) {
+      return 'Chrome bloqueó las notificaciones para Lumen Sign. Abre los permisos del sitio, selecciona Permitir y vuelve a comprobar.';
+    }
+    if (name.includes('aborterror') || text.includes('registration failed') || text.includes('push service error')) {
+      return 'Chrome no pudo terminar el registro Push. Cierra las demás pestañas de Lumen Sign, actualiza esta página e intenta nuevamente.';
+    }
+    if (name.includes('invalidstateerror') || text.includes('service worker')) {
+      return 'El servicio de notificaciones del navegador no quedó listo. Actualiza la página y vuelve a intentarlo.';
+    }
+    if (name.includes('invalidaccesserror') || text.includes('vapid') || text.includes('applicationserverkey')) {
+      return 'La configuración Push de Lumen Sign no fue aceptada. El administrador debe revisar la llave VAPID publicada.';
+    }
+    if (name.includes('timeouterror') || isConnectivityError(error)) {
+      return 'El registro Push tardó demasiado o la red bloqueó el servicio. Prueba otra red; si funciona, Sistemas debe revisar el acceso a Google FCM.';
+    }
+    return friendlyErrorMessage(error, 'No fue posible registrar este dispositivo. Actualiza la página e intenta nuevamente.');
+  }
+
+  function setPushActionBusy(busy) {
+    state.pushActionBusy = Boolean(busy);
+    renderPushOnboarding();
+  }
+
+  async function rememberPushActivationFailure(error, wasPrompted = true) {
+    const message = pushActivationFriendlyError(error);
+    let previous = state.pushDeviceState || {};
+    try {
+      previous = await withTimeout(
+        inspectPushDeviceState(),
+        5000,
+        'No se pudo consultar el registro local del navegador.'
+      ) || previous;
+    } catch (inspectionError) {
+      console.warn('No se pudo volver a inspeccionar el registro Push.', inspectionError);
+    }
+    const permission = 'Notification' in window ? Notification.permission : 'unsupported';
+    const capability = permission === 'denied'
+      ? 'permission_denied'
+      : (isConnectivityError(error) || String(error?.name || '').toLowerCase().includes('timeouterror'))
+        ? 'network_error'
+        : 'registration_error';
+    state.pushLastActionError = message;
+    state.pushDeviceState = {
+      ...previous,
+      deviceKey: previous.deviceKey || getOrCreatePushDeviceKey(),
+      deviceLabel: previous.deviceLabel || currentDeviceLabel(),
+      platform: previous.platform || currentPlatformLabel(),
+      browser: previous.browser || currentBrowserLabel(),
+      installed: previous.installed ?? isStandaloneApp(),
+      supported: previous.supported ?? pushSupported(),
+      permission,
+      capability,
+      subscription: previous.subscription || null,
+      endpoint: previous.endpoint || previous.subscription?.endpoint || null,
+      lastErrorCode: capability === 'network_error' ? 'push_network_error' : 'push_registration_error'
+    };
+    try {
+      await withTimeout(
+        reportPushDeviceState(state.pushDeviceState, wasPrompted),
+        8000,
+        'No se pudo registrar el diagnóstico Push.'
+      );
+    } catch (reportError) {
+      console.warn('No se pudo guardar el diagnóstico del registro Push.', reportError);
+    }
+    renderPushOnboarding();
+    renderPushComplianceBanner();
+    return message;
+  }
+
   async function activatePushNotifications() {
-    const result = await run(async () => {
+    if (state.pushActionBusy) return false;
+    state.pushLastActionError = '';
+    setPushActionBusy(true);
+    try {
       if (!PUSH_VAPID_PUBLIC_KEY) throw new Error('Falta la llave pública VAPID.');
       if (isIosDevice() && !isStandaloneApp()) throw new Error('En iPhone o iPad, primero agrega Lumen Sign a la pantalla de inicio y ábrelo desde el icono.');
       if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones Push web.');
 
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') throw new Error('No se concedió permiso para mostrar notificaciones. Abre los permisos del navegador para corregirlo.');
+      const permission = Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
+      if (permission !== 'granted') throw new DOMException('Notification permission denied', 'NotAllowedError');
 
-      const registration = await getPushRegistration();
-      let subscription = await registration.pushManager.getSubscription();
+      const registration = await withTimeout(
+        getPushRegistration(),
+        PUSH_ACTION_TIMEOUT_MS,
+        'El navegador tardó demasiado en preparar el servicio de notificaciones.'
+      );
+      let subscription = await withTimeout(
+        registration.pushManager.getSubscription(),
+        PUSH_ACTION_TIMEOUT_MS,
+        'El navegador tardó demasiado en consultar el registro Push.'
+      );
       if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)
-        });
+        subscription = await withTimeout(
+          registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)
+          }),
+          PUSH_ACTION_TIMEOUT_MS,
+          'El navegador tardó demasiado en crear el registro Push.'
+        );
       }
-      await registerExistingPushSubscription(subscription);
-      await loadPushSubscriptions();
+      await withTimeout(
+        registerExistingPushSubscription(subscription),
+        PUSH_ACTION_TIMEOUT_MS,
+        'Lumen Sign tardó demasiado en guardar este dispositivo.'
+      );
+      await withTimeout(loadPushSubscriptions(), INITIAL_LOAD_TIMEOUT_MS, 'No se pudo actualizar la lista de dispositivos.');
+      await withTimeout(
+        enforcePushCompliance({ force: true, wasPrompted: true }),
+        PUSH_ACTION_TIMEOUT_MS,
+        'Lumen Sign tardó demasiado en comprobar el registro Push.'
+      );
+      if (!state.pushCompliance?.compliant) {
+        throw new Error('El dispositivo se registró, pero la comprobación no pudo confirmarlo todavía. Presiona comprobar nuevamente.');
+      }
+      state.pushLastActionError = '';
+      toast('Notificaciones activadas en este dispositivo.');
       return true;
-    }, 'Notificaciones activadas en este dispositivo.');
-    await enforcePushCompliance({ force: true, wasPrompted: true });
-    return Boolean(result);
+    } catch (error) {
+      console.error('No se pudo activar Push.', error);
+      const message = await rememberPushActivationFailure(error, true);
+      toast(message, true);
+      openPushComplianceGate();
+      return false;
+    } finally {
+      setPushActionBusy(false);
+    }
+  }
+
+  async function checkPushNotifications() {
+    if (state.pushActionBusy) return false;
+    setPushActionBusy(true);
+    try {
+      state.pushLastActionError = '';
+      await withTimeout(
+        enforcePushCompliance({ force: true }),
+        PUSH_ACTION_TIMEOUT_MS,
+        'Lumen Sign tardó demasiado en comprobar el registro Push.'
+      );
+      if (state.pushCompliance?.compliant) {
+        toast('Dispositivo comprobado. Ya puede recibir notificaciones.');
+        return true;
+      }
+      const view = pushOnboardingPresentation();
+      toast(view.detail || 'El dispositivo todavía no cumple el registro Push.', true);
+      return false;
+    } catch (error) {
+      console.error('No se pudo comprobar Push.', error);
+      const message = await rememberPushActivationFailure(error, false);
+      toast(message, true);
+      return false;
+    } finally {
+      setPushActionBusy(false);
+    }
   }
 
   async function disablePushNotifications() {
@@ -6026,6 +6236,10 @@
       return;
     }
 
+    // La validación de identidad ya terminó. Se liberan los botones antes de
+    // cargar el resto de datos para que el siguiente paso de seguridad nunca
+    // aparezca deshabilitado si una consulta secundaria tarda en responder.
+    setBusy(false);
     await loadProtectedAppData();
     toast('Doble factor verificado. Acceso autorizado.');
   }
@@ -6225,6 +6439,9 @@
       clearForcePasswordDialog();
 
       if (await enforceMfaForAll()) {
+        // El cambio ya quedó guardado. La carga posterior no debe mantener
+        // bloqueada la ventana obligatoria de notificaciones.
+        setBusy(false);
         await loadProtectedAppData();
       }
 
@@ -6404,7 +6621,7 @@
     els['mfa-verify-retry']?.addEventListener('click', retryMfaChallenge);
     els['mfa-verify-code']?.addEventListener('input', () => clearMfaInlineError('verify'));
     els['push-onboarding-activate']?.addEventListener('click', activatePushNotifications);
-    els['push-onboarding-check']?.addEventListener('click', () => run(() => enforcePushCompliance({ force: true }), 'Estado de notificaciones comprobado.'));
+    els['push-onboarding-check']?.addEventListener('click', checkPushNotifications);
     els['push-onboarding-admin-bypass']?.addEventListener('click', () => {
       if (!isSuperAdmin()) return;
       state.pushAdminBypass = true;
