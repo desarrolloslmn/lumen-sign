@@ -18,7 +18,7 @@
   });
 
   const MAX_FILE_MB = Number(cfg.maxFileMB || 6);
-  const APP_VERSION = '8.9.3-recuperacion-push-estable';
+  const APP_VERSION = '8.9.4-recuperacion-push-mfa-excepciones';
   const ALLOW_EMAIL_PASSWORD_RESET = false;
   const PASSWORD_RECOVERY_MESSAGE = 'La recuperación por correo está desactivada. Envía una solicitud para que el superadministrador genere un acceso temporal.';
   const ADMIN_RECOVERY_FUNCTION = 'admin-recover-access';
@@ -2728,7 +2728,48 @@
 
   async function getPushRegistration() {
     if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones push web.');
-    return navigator.serviceWorker.register('./sw.js', { scope: './' });
+    const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    if (registration.active) return registration;
+    // register() puede resolver mientras el Service Worker todavía se está
+    // instalando. Esperar a ready evita el AbortError del primer intento.
+    return navigator.serviceWorker.ready;
+  }
+
+  function retryablePushRegistrationError(error) {
+    const name = String(error?.name || '').toLowerCase();
+    const text = errorText(error);
+    return name.includes('aborterror')
+      || text.includes('registration failed')
+      || text.includes('push service error');
+  }
+
+  async function createPushSubscriptionWithRetry(registration) {
+    let currentRegistration = registration;
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await withTimeout(
+          currentRegistration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)
+          }),
+          PUSH_ACTION_TIMEOUT_MS,
+          'El navegador tardó demasiado en crear el registro Push.'
+        );
+      } catch (error) {
+        lastError = error;
+        if (attempt === 2 || !retryablePushRegistrationError(error)) throw error;
+        // Chrome a veces cancela el primer alta mientras activa el Service
+        // Worker. Se espera brevemente y se repite sin pedir otro clic.
+        await new Promise(resolve => setTimeout(resolve, 900));
+        currentRegistration = await withTimeout(
+          getPushRegistration(),
+          PUSH_ACTION_TIMEOUT_MS,
+          'El navegador tardó demasiado en reintentar el servicio de notificaciones.'
+        );
+      }
+    }
+    throw lastError || new Error('No se pudo crear el registro Push.');
   }
 
   async function currentPushSubscription() {
@@ -3230,14 +3271,7 @@
         'El navegador tardó demasiado en consultar el registro Push.'
       );
       if (!subscription) {
-        subscription = await withTimeout(
-          registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)
-          }),
-          PUSH_ACTION_TIMEOUT_MS,
-          'El navegador tardó demasiado en crear el registro Push.'
-        );
+        subscription = await createPushSubscriptionWithRetry(registration);
       }
       await withTimeout(
         registerExistingPushSubscription(subscription),
